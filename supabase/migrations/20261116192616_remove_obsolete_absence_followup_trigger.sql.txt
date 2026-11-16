@@ -1,0 +1,10 @@
+﻿-- THE TRAINERS
+-- Remove obsolete absence followup trigger
+-- Applied to Supabase: 20261116192616
+-- Status: APPLIED IN PRODUCTION (do not re-run)
+
+-- Production changes (documented, not re-executable here):
+-- 1. Dropped trigger attendance_followup_refresh on public.attendance_records.
+-- 2. Retained trigger attendance_followup_trg which calls track_absence_followup().
+-- 3. No changes to track_absence_followup() function or mark_followup_handled() RPC.
+'@
