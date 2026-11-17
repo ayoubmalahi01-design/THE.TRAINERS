@@ -2024,24 +2024,23 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
       }
     }
 
-    // Step 3 — finalize. The official submission timestamp is assigned by the
-    // trusted database workflow; the browser only asks for the transition.
+    // Step 3 — finalize via the secure RPC. The RPC verifies ownership and
+    // state server-side, assigns submitted_at/finalized_at from DB time, and
+    // prevents double-submission. The browser only requests the transition.
+    if (shift?.ended_at) {
+      await supabase
+        .from('daily_reports')
+        .update({ shift_end: shift.ended_at })
+        .eq('id', savedId)
+        .eq('coach_id', profile.id)
+        .eq('is_finalized', false)
+    }
     const finalize = await supabase
-      .from('daily_reports')
-      .update({
-        status: 'submitted',
-        is_finalized: true,
-        finalized_at: new Date().toISOString(),
-        shift_end: shift?.ended_at ?? new Date().toISOString(),
-        submitted_at: draftSubmittedAt(),
-      })
-      .eq('id', savedId)
-      .eq('coach_id', profile.id)
-      .eq('is_finalized', false)
-      .select('id')
+      .rpc('submit_daily_report', { p_report_id: savedId })
     setBusy(false)
     if (finalize.error) { notify(finalize.error.message); return }
-    if (!affectedRows(finalize.data)) {
+    const result = finalize.data as { id?: string; ok?: boolean; error?: string } | null
+    if (!result || (result.ok === false) || (!result.id && !result.ok)) {
       notify(t('reportAlreadyFinalized'))
       await load()
       return
@@ -2433,7 +2432,11 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
   const [body, setBody] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [readers, setReaders] = useState<{ id: string; full_name: string; role: string; read_at: string }[]>([])
+  const [readersNoticeId, setReadersNoticeId] = useState<string | null>(null)
+  const [readersLoading, setReadersLoading] = useState(false)
   const canPublish = ['manager', 'admin'].includes(profile.role)
+  const canDelete = ['manager', 'admin'].includes(profile.role)
 
   async function load() {
     setLoading(true)
@@ -2447,6 +2450,67 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
   }
 
   useEffect(() => { void load() }, [profile.institution_id])
+
+  async function markNoticeRead(noticeId: string) {
+    if (!isConfigured) return
+    try {
+      await supabase.from('notice_reads').insert({ notice_id: noticeId, reader_id: profile.id })
+    } catch {
+      // Already read or RLS denied — ignore
+    }
+  }
+
+  async function openNotice(notice: { id: string; title: string; body: string; created_at: string }) {
+    void markNoticeRead(notice.id)
+  }
+
+  async function loadReaders(noticeId: string) {
+    setReadersLoading(true)
+    setReadersNoticeId(noticeId)
+    if (!isConfigured) { setReadersLoading(false); return }
+    const { data, error } = await supabase
+      .from('notice_reads')
+      .select('reader_id, read_at')
+      .eq('notice_id', noticeId)
+    if (error) { notify(error.message); setReadersLoading(false); return }
+    const readerIds = ((data ?? []) as { reader_id: string; read_at: string }[]).map((r) => r.reader_id)
+    if (readerIds.length === 0) { setReaders([]); setReadersLoading(false); return }
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name, role')
+      .in('id', readerIds)
+      .eq('institution_id', profile.institution_id)
+    const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]))
+    setReaders(((data ?? []) as { reader_id: string; read_at: string }[]).map((r) => {
+      const p = profileMap.get(r.reader_id) as { full_name?: string; role?: string } | undefined
+      return { id: r.reader_id, full_name: p?.full_name ?? 'Unknown', role: p?.role ?? 'coach', read_at: r.read_at }
+    }))
+    setReadersLoading(false)
+  }
+
+  async function deleteNotice(noticeId: string) {
+    if (!isConfigured) { notify(t('configMissing')); return }
+    if (!window.confirm(t('deleteNoticeConfirm'))) return
+    setBusy(true)
+    const { error } = await supabase.from('admin_notices').delete().eq('id', noticeId).eq('institution_id', profile.institution_id)
+    setBusy(false)
+    if (error) { notify(t('noticeDeleteFailed')); return }
+    // Audit log entry
+    try {
+      await supabase.from('audit_logs').insert({
+        institution_id: profile.institution_id,
+        actor_id: profile.id,
+        action: 'DELETE_NOTICE',
+        table_name: 'admin_notices',
+        record_id: noticeId,
+        old_data: null,
+        new_data: { deleted_by: profile.full_name, deleted_at: new Date().toISOString() },
+      })
+    } catch { /* best effort */ }
+    notify(t('noticeDeleted'))
+    setReadersNoticeId(null)
+    await load()
+  }
 
   async function save(e: FormEvent) {
     e.preventDefault()
@@ -2478,12 +2542,32 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
         )}
       />
       {loading ? <Empty t={t} /> : items.length === 0 ? <Empty t={t} /> : items.map((notice) => (
-        <article className="panel notice" key={notice.id}>
+        <article className="panel notice" key={notice.id} onClick={() => { void openNotice(notice) }}>
           <div className="notice-head"><Bell size={18} /><small>{formatDateTime(notice.created_at)}</small></div>
           <h3>{notice.title}</h3>
           <p>{notice.body}</p>
+          {canPublish && (
+            <div className="heading-actions" style={{ marginTop: 8 }}>
+              <button className="secondary action-btn" onClick={(e) => { e.stopPropagation(); void loadReaders(notice.id) }}>{t('noticeReaders')}</button>
+              <button className="danger action-btn" onClick={(e) => { e.stopPropagation(); void deleteNotice(notice.id) }}>{t('deleteNotice')}</button>
+            </div>
+          )}
         </article>
       ))}
+      {readersNoticeId && (
+        <Modal title={t('noticeReaders')} close={() => setReadersNoticeId(null)} closeLabel={t('close')}>
+          {readersLoading ? <Empty t={t} /> : readers.length === 0 ? <p className="muted">{t('noData')}</p> : (
+            <section className="panel">
+              {readers.map((r) => (
+                <div className="student-row" key={r.id}>
+                  <div className="grow"><b>{r.full_name}</b><small>{r.role}</small></div>
+                  <small>{formatDateTime(r.read_at)}</small>
+                </div>
+              ))}
+            </section>
+          )}
+        </Modal>
+      )}
       {show && (
         <Modal title={t('newNotice')} close={() => setShow(false)} closeLabel={t('close')}>
           <form onSubmit={save}>
@@ -2505,7 +2589,80 @@ function Notifications({ profile, t }: { profile: Profile; t: T }) {
   }[]>([])
   const [loading, setLoading] = useState(true)
   const [permission, setPermission] = useState<PushPermission>(() => pushEnv().permission)
+  const [pushSubscribed, setPushSubscribed] = useState(false)
+  const [pushBusy, setPushBusy] = useState(false)
   const nav = useNavigate()
+
+  async function checkPushSubscription() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+    try {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      setPushSubscribed(!!sub)
+    } catch { /* ignore */ }
+  }
+
+  useEffect(() => { void checkPushSubscription() }, [])
+
+  async function subscribePush() {
+    if (!isConfigured) { notify(t('configMissing')); return }
+    setPushBusy(true)
+    try {
+      const perm = await requestPushPermission()
+      setPermission(perm)
+      if (perm !== 'granted') { notify(t('pushPermissionDenied')); setPushBusy(false); return }
+      const reg = await navigator.serviceWorker.ready
+      // VAPID public key must be provided via env or config; placeholder for now
+      const vapidPublicKey = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string) || ''
+      if (!vapidPublicKey) { notify(t('pushNotSupported')); setPushBusy(false); return }
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
+      })
+      const subJson = sub.toJSON()
+      const { error } = await supabase.from('push_subscriptions').upsert({
+        user_id: profile.id,
+        institution_id: profile.institution_id,
+        endpoint: subJson.endpoint,
+        p256dh: subJson.keys?.p256dh ?? '',
+        auth: subJson.keys?.auth ?? '',
+        user_agent: navigator.userAgent,
+      }, { onConflict: 'user_id,endpoint' })
+      if (error) { notify(error.message); setPushBusy(false); return }
+      setPushSubscribed(true)
+      notify(t('pushSubscribed'))
+    } catch (err) {
+      notify(err instanceof Error ? err.message : t('pushNotSupported'))
+    }
+    setPushBusy(false)
+  }
+
+  async function unsubscribePush() {
+    if (!isConfigured) { notify(t('configMissing')); return }
+    setPushBusy(true)
+    try {
+      const reg = await navigator.serviceWorker.ready
+      const sub = await reg.pushManager.getSubscription()
+      if (sub) {
+        await sub.unsubscribe()
+        await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint).eq('user_id', profile.id)
+      }
+      setPushSubscribed(false)
+      notify(t('pushUnsubscribe'))
+    } catch (err) {
+      notify(err instanceof Error ? err.message : t('pushNotSupported'))
+    }
+    setPushBusy(false)
+  }
+
+  function urlBase64ToUint8Array(base64String: string): Uint8Array {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
+    const rawData = window.atob(base64)
+    const outputArray = new Uint8Array(rawData.length)
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i)
+    return outputArray
+  }
 
   async function load() {
     setLoading(true)
@@ -2582,6 +2739,13 @@ function Notifications({ profile, t }: { profile: Profile; t: T }) {
             {permission === 'granted' && <span className="pill success">{t('notificationsOn')}</span>}
             {(permission === 'denied' || !env.supported || permission === 'unsupported') && (
               <span className="pill warning">{t('notificationsBlocked')}</span>
+            )}
+            {permission === 'granted' && 'PushManager' in window && (
+              pushSubscribed ? (
+                <button className="secondary action-btn" onClick={() => { void unsubscribePush() }} disabled={pushBusy}>{t('pushUnsubscribe')}</button>
+              ) : (
+                <button className="secondary action-btn" onClick={() => { void subscribePush() }} disabled={pushBusy}>{t('pushSubscribe')}</button>
+              )
             )}
             {unreadCount > 0 && <button className="secondary action-btn" onClick={markAllRead}>{t('markRead')}</button>}
           </div>

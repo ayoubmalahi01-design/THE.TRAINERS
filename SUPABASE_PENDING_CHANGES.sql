@@ -563,6 +563,52 @@ create policy reports_coach_never_delete on public.daily_reports as restrictive 
 using (public.current_app_role() is distinct from 'coach');
 
 -- ============================================================================
+-- SECTION 13 - NOTICE READ TRACKING (pending approval)
+-- ----------------------------------------------------------------------------
+-- Per-user read tracking for admin_notices. Each user's read status is
+-- recorded independently so one user reading a notice never marks it read
+-- for others.
+
+create table if not exists public.notice_reads (
+  notice_id uuid not null references public.admin_notices(id) on delete cascade,
+  reader_id uuid not null references public.profiles(id) on delete cascade,
+  read_at timestamptz not null default now(),
+  primary key (notice_id, reader_id)
+);
+
+create index if not exists notice_reads_reader_idx
+  on public.notice_reads(reader_id, read_at desc);
+
+alter table public.notice_reads enable row level security;
+
+drop policy if exists notice_reads_read_own on public.notice_reads;
+create policy notice_reads_read_own on public.notice_reads for select to authenticated
+using (reader_id = auth.uid());
+
+drop policy if exists notice_reads_insert_own on public.notice_reads;
+create policy notice_reads_insert_own on public.notice_reads for insert to authenticated
+with check (
+  reader_id = auth.uid()
+  and exists (select 1 from public.admin_notices n where n.id = notice_id and n.institution_id = public.current_institution_id())
+);
+
+-- ============================================================================
+-- SECTION 14 - NOTICE DELETE AUDIT (pending approval)
+-- ----------------------------------------------------------------------------
+-- When an admin/manager deletes a notice, the audit log records the deletion.
+-- The notice_reads rows are cascade-deleted with the notice.
+
+drop policy if exists admin_notices_delete on public.admin_notices;
+create policy admin_notices_delete on public.admin_notices for delete to authenticated
+using (
+  institution_id = public.current_institution_id()
+  and (
+    public.current_app_role() = 'manager'
+    or (public.current_app_role() = 'admin' and author_id = auth.uid())
+  )
+);
+
+-- ============================================================================
 -- END OF PENDING CHANGES
 -- Nothing in this file has been executed. Every section requires explicit
 -- production approval. Do not paste this file into the SQL editor as a whole:
