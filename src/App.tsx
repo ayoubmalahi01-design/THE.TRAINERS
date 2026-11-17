@@ -52,6 +52,7 @@ type Profile = {
   avatar_path?: string | null
 }
 type T = (key: string) => string
+type AuthOtpType = 'signup' | 'invite' | 'magiclink' | 'recovery' | 'email_change' | 'email'
 type Student = {
   id: string
   student_code: string
@@ -179,11 +180,23 @@ function passwordSetupLink(): 'recovery' | 'invite' | null {
   if (typeof window === 'undefined') return null
   try {
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
-    const type = hash.get('type') || new URLSearchParams(window.location.search).get('type')
+    const type = hash.get('type')
     return type === 'recovery' || type === 'invite' ? type : null
   } catch {
     return null
   }
+}
+
+/** Removes one-time auth parameters without touching the router path. */
+function cleanAuthUrl() {
+  try {
+    const url = new URL(window.location.href)
+    for (const key of ['code', 'token_hash', 'type', 'error', 'error_code', 'error_description']) {
+      url.searchParams.delete(key)
+    }
+    url.hash = ''
+    window.history.replaceState(null, '', `${url.pathname}${url.search}`)
+  } catch { /* history is optional */ }
 }
 
 function defaultLocalProfile(): Profile {
@@ -251,7 +264,8 @@ export default function App() {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [profileError, setProfileError] = useState('')
   const [localProfile, setLocalProfile] = useState<Profile>(defaultLocalProfile)
-  const [passwordSetup, setPasswordSetup] = useState<'recovery' | 'invite' | null>(passwordSetupLink)
+  const [passwordSetup, setPasswordSetup] = useState<'recovery' | 'invite' | null>(null)
+  const [authNotice, setAuthNotice] = useState('')
   const [busy, setBusy] = useState(true)
   const [menu, setMenu] = useState(false)
   const [toast, setToast] = useState('')
@@ -314,14 +328,61 @@ export default function App() {
       await loadProfile(id)
       if (alive) setBusy(false)
     }
-    supabase.auth.getSession().then(({ data }) => {
-      if (!alive) return
-      setSession(data.session)
-      if (data.session) void sync(data.session.user.id)
-      else setBusy(false)
-    })
+
+    /**
+     * Supabase can return an email link in several shapes. The client already
+     * handles implicit hash links; PKCE `?code=` and `?token_hash=&type=`
+     * links are completed here. Acceptance never activates the account: it
+     * only authenticates the person so they can accept in the app.
+     */
+    async function handleEmailLink(): Promise<boolean> {
+      const search = new URLSearchParams(window.location.search)
+      const hash = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+      const code = search.get('code')
+      const tokenHash = search.get('token_hash')
+      const rawType = search.get('type') || hash.get('type') || ''
+      const linkType: AuthOtpType = rawType === 'invite' || rawType === 'recovery'
+        || rawType === 'signup' || rawType === 'magiclink' || rawType === 'email_change'
+        ? rawType
+        : 'email'
+      const linkError = search.get('error_description') || search.get('error')
+        || hash.get('error_description') || hash.get('error')
+
+      if (linkError) {
+        if (alive) setAuthNotice(makeT(lang)('authLinkInvalid'))
+        cleanAuthUrl()
+        return true
+      }
+      if (!code && !tokenHash) {
+        return false
+      }
+
+      // The Supabase client may already have consumed a PKCE code during its
+      // own initialisation. Only exchange when no session was recovered.
+      const current = await supabase.auth.getSession()
+      if (current.data.session) {
+        if (linkType === 'recovery' || linkType === 'invite') setPasswordSetup(linkType)
+        cleanAuthUrl()
+        return true
+      }
+
+      const result = code
+        ? await supabase.auth.exchangeCodeForSession(code)
+        : await supabase.auth.verifyOtp({ token_hash: tokenHash as string, type: linkType })
+      if (!alive) return true
+      if (result.error) {
+        setAuthNotice(makeT(lang)('authLinkInvalid'))
+      } else {
+        if (linkType === 'recovery' || linkType === 'invite') setPasswordSetup(linkType)
+        setAuthNotice('')
+      }
+      cleanAuthUrl()
+      return true
+    }
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, next) => {
       if (!alive) return
+      if (event === 'INITIAL_SESSION') return
       if (event === 'PASSWORD_RECOVERY') setPasswordSetup('recovery')
       setSession(next)
       if (next) {
@@ -333,6 +394,19 @@ export default function App() {
         setBusy(false)
       }
     })
+
+    void (async () => {
+      await handleEmailLink()
+      const { data } = await supabase.auth.getSession()
+      if (!alive) return
+      setSession(data.session)
+      if (data.session) {
+        const implicit = passwordSetupLink()
+        if (implicit) setPasswordSetup(implicit)
+        void sync(data.session.user.id)
+      } else setBusy(false)
+    })()
+
     return () => { alive = false; subscription.unsubscribe() }
   }, [])
 
@@ -438,7 +512,9 @@ export default function App() {
     notify(t('savedOk'))
   }
 
-  if (passwordSetup) {
+  // Password setup only makes sense once the email link produced a session.
+  // A bare ?type=invite URL without a valid token must fall through to login.
+  if (passwordSetup && (session || isLocalMode)) {
     return (
       <RecoveryScreen
         mode={passwordSetup}
@@ -455,7 +531,7 @@ export default function App() {
 
   if (!isLocalMode) {
     if (!session) {
-      return <Login lang={lang} setLang={setLang} t={t} />
+      return <Login lang={lang} setLang={setLang} t={t} notice={authNotice} />
     }
     if (gate !== 'active') {
       return (
@@ -465,6 +541,7 @@ export default function App() {
           onRetry={retryProfile}
           onSignOut={signOut}
           onAccepted={retryProfile}
+          notice={authNotice}
         />
       )
     }
@@ -513,14 +590,39 @@ export default function App() {
         ] : []),
       ]
 
+  // Five primary destinations for the phone bottom bar. Everything else stays
+  // in the drawer so no label is ever clipped on a small screen.
+  const mobileNavItems: [string, LucideIcon, string, boolean?][] = owner
+    ? [
+        ['/', Home, 'home'],
+        ['/owner', Building2, 'ownerConsole'],
+        ['/audit', History, 'audit'],
+      ]
+    : viewProfile.role === 'coach'
+      ? [
+          ['/', Home, 'home'],
+          ['/students', Users, 'students'],
+          ['/attendance', CalendarDays, 'attendance'],
+          ['/reports', ClipboardList, 'reports'],
+          ['/messages', MessageCircle, 'messages'],
+        ]
+      : [
+          ['/', Home, 'home'],
+          ['/students', Users, 'students'],
+          ['/reports', ClipboardList, 'reports'],
+          ['/team', UserPlus, 'team'],
+          ['/messages', MessageCircle, 'messages'],
+        ]
+
   return (
     <div className="app-shell">
       <header className="topbar">
-        <button className="icon-btn mobile-menu" aria-label="Menu" onClick={() => setMenu((v) => !v)}>
+        <button className="icon-btn mobile-menu" aria-label={t('menu')} aria-expanded={menu}
+          aria-controls="app-sidebar" onClick={() => setMenu((v) => !v)}>
           {menu ? <X /> : <Menu />}
         </button>
         <div className="brand">
-          <img src="/icons/brand-emblem.png" alt="T" className="brand-mark" style={{objectFit:'cover',padding:0}} />
+          <img src="/icons/brand-emblem.png" alt="THE TRAINERS" className="brand-mark" />
           <div className="app-name">
             <span className="arabic">{t('app')}</span>
             <span className="latin">{t('subtitle')}</span>
@@ -538,7 +640,9 @@ export default function App() {
         </div>
       </header>
       <div className="layout">
-        <aside className={`sidebar ${menu ? 'open' : ''}`}>
+        <button className={`sidebar-scrim ${menu ? 'show' : ''}`} aria-label={t('close')}
+          tabIndex={menu ? 0 : -1} onClick={() => setMenu(false)} />
+        <aside id="app-sidebar" className={`sidebar ${menu ? 'open' : ''}`}>
           <div className="user-mini">
             <div className="avatar">
               {myAvatarPath ? (
@@ -587,7 +691,7 @@ export default function App() {
             <Route path="/notices" element={!owner ? <Notices profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notifications" element={!owner ? <Notifications profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/messages" element={!owner ? <Messages profile={viewProfile} t={t} /> : <Denied t={t} />} />
-            <Route path="/accept-invitation" element={!owner ? <AcceptInvitation t={t} onAccepted={retryProfile} /> : <Denied t={t} />} />
+            <Route path="/accept-invitation" element={!owner ? <AcceptInvitation t={t} profile={viewProfile} onAccepted={retryProfile} /> : <Denied t={t} />} />
             <Route path="/academic-years" element={admin && !owner ? <AcademicYears profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/team" element={admin && !owner ? <Team profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/medical" element={admin && !owner ? <Medical profile={viewProfile} t={t} /> : <Denied t={t} />} />
@@ -598,6 +702,17 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      <nav className="mobile-nav" aria-label={t('navigation')}>
+        {mobileNavItems.map(([to, Icon, key, badge]) => (
+          <NavLink end={to === '/'} to={to} key={to}>
+            <span className="mobile-nav-icon">
+              <Icon size={20} />
+              {badge && unread > 0 && <span className="mobile-nav-badge">{unread > 9 ? '9+' : unread}</span>}
+            </span>
+            <span>{t(key)}</span>
+          </NavLink>
+        ))}
+      </nav>
       {toast && <div className="toast" role="status" onClick={() => setToast('')}>{toast}</div>}
     </div>
   )
@@ -654,7 +769,12 @@ function RecoveryScreen({ mode, t, onDone, onSignOut }: {
   )
 }
 
-function Login({ lang, setLang, t }: { lang: Lang; setLang: (v: Lang) => void; t: T }) {
+function Login({ lang, setLang, t, notice }: {
+  lang: Lang
+  setLang: (v: Lang) => void
+  t: T
+  notice?: string
+}) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -687,59 +807,72 @@ function Login({ lang, setLang, t }: { lang: Lang; setLang: (v: Lang) => void; t
 
   return (
     <div className="login-wrap">
-      <section className="login-card">
-        <div className="login-brand">
-          <img src="/icons/brand-emblem.png" alt="T" className="brand-mark big" style={{objectFit:"cover",padding:0}} />
-          <h1 className="app-name" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-            <span className="arabic" style={{ fontFamily: 'var(--arabic-font),system-ui,sans-serif', fontSize: '17px', fontWeight: 600, letterSpacing: '.01em', color: '#f5f5f5' }}>{t('app')}</span>
-            <span className="latin" style={{ fontFamily: 'var(--latin-font),system-ui,sans-serif', fontSize: '11px', color: '#a8c6c2' }}>{t('subtitle')}</span>
-          </h1>
-        </div>
-        <div className="login-lang">
-          <Languages size={16} />
-          <select aria-label={t('language')} value={lang} onChange={(e) => setLang(e.target.value as Lang)}>
-            <option value="ar">العربية</option>
-            <option value="fr">Français</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-        <h2>{mode === 'login' ? t('welcome') : t('forgotPassword')}</h2>
-        {mode === 'login' ? (
-          <form onSubmit={submit}>
-            <label>
-              {t('email')}
-              <input type="email" autoComplete="username" required value={email}
-                onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
-            </label>
-            <label>
-              {t('password')}
-              <input type="password" autoComplete="current-password" required value={password}
-                onChange={(e) => setPassword(e.target.value)} />
-            </label>
-            {error && <div className="error-box">{error}</div>}
-            <button className="primary full" disabled={loading}>{loading ? t('loading') : t('login')}</button>
-            <button type="button" className="secondary full" onClick={() => { setError(''); setMode('reset') }}>
-              {t('forgotPassword')}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={sendReset}>
-            <p className="muted">{t('resetEmailFirst')}</p>
-            <label>
-              {t('email')}
-              <input type="email" autoComplete="email" required value={email}
-                onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
-            </label>
-            <button className="primary full" disabled={resetBusy}>
-              {resetBusy ? t('sendingReset') : t('forgotPassword')}
-            </button>
-            <button type="button" className="secondary full" onClick={() => setMode('login')}>
-              {t('cancel')}
-            </button>
-          </form>
-        )}
-        <small className="secure-note"><ShieldCheck size={14} /> {t('secureAccess')}</small>
-      </section>
+      <div className="login-stage">
+        <aside className="login-aside" aria-hidden="true">
+          <div className="login-aside-emblem">
+            <img src="/icons/brand-emblem.png" alt="" />
+          </div>
+          <span className="eyebrow">{t('app')}</span>
+          <h1>{t('heroTitle')}</h1>
+          <p>{t('heroBody')}</p>
+          <div className="login-aside-rule" />
+          <small>{t('subtitle')}</small>
+        </aside>
+        <section className="login-card">
+          <div className="login-brand">
+            <img src="/icons/brand-emblem.png" alt="THE TRAINERS" className="brand-mark big" />
+            <h1 className="app-name">
+              <span className="arabic">{t('app')}</span>
+              <span className="latin">{t('subtitle')}</span>
+            </h1>
+          </div>
+          <div className="login-lang">
+            <Languages size={16} />
+            <select aria-label={t('language')} value={lang} onChange={(e) => setLang(e.target.value as Lang)}>
+              <option value="ar">العربية</option>
+              <option value="fr">Français</option>
+              <option value="en">English</option>
+            </select>
+          </div>
+          <h2>{mode === 'login' ? t('welcome') : t('forgotPassword')}</h2>
+          {notice && <div className="error-box" role="alert">{notice}</div>}
+          {mode === 'login' ? (
+            <form onSubmit={submit}>
+              <label>
+                {t('email')}
+                <input type="email" autoComplete="username" required value={email}
+                  onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+              </label>
+              <label>
+                {t('password')}
+                <input type="password" autoComplete="current-password" required value={password}
+                  onChange={(e) => setPassword(e.target.value)} />
+              </label>
+              {error && <div className="error-box">{error}</div>}
+              <button className="primary full" disabled={loading}>{loading ? t('loading') : t('login')}</button>
+              <button type="button" className="secondary full" onClick={() => { setError(''); setMode('reset') }}>
+                {t('forgotPassword')}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={sendReset}>
+              <p className="muted">{t('resetEmailFirst')}</p>
+              <label>
+                {t('email')}
+                <input type="email" autoComplete="email" required value={email}
+                  onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+              </label>
+              <button className="primary full" disabled={resetBusy}>
+                {resetBusy ? t('sendingReset') : t('forgotPassword')}
+              </button>
+              <button type="button" className="secondary full" onClick={() => setMode('login')}>
+                {t('cancel')}
+              </button>
+            </form>
+          )}
+          <small className="secure-note"><ShieldCheck size={14} /> {t('secureAccess')}</small>
+        </section>
+      </div>
     </div>
   )
 }
@@ -780,60 +913,36 @@ async function functionErrorCode(error: unknown): Promise<string> {
   return ''
 }
 
-function otpErrorMessage(code: string, t: T): string {
-  switch (code) {
-    case 'edge_unreachable':
-      return t('edgeUnreachable')
-    case 'too_many_attempts':
-    case 'rate_limited':
-      return t('otpTooMany')
-    case 'otp_expired':
-    case 'invitation_expired':
-      return t('otpExpired')
-    case 'recipient_mismatch':
-      return t('otpRecipientMismatch')
-    case 'invitation_not_pending':
-    case 'invitation_already_accepted':
-      return t('otpNotPending')
-    case 'account_suspended':
-      return t('suspendedMsg')
-    case 'different_institution':
-      return t('otpDifferentInstitution')
-    case 'email_required':
-      return t('otpEmailRequired')
-    default:
-      return t('invalidOtp')
-  }
-}
-
 function inviteErrorMessage(code: string, t: T): string {
   switch (code) {
     case 'edge_unreachable':
       return t('edgeUnreachable')
-    case 'already_registered':
-      return t('alreadyRegistered')
-    case 'invalid_phone':
-      return t('invalidPhone')
+    case 'duplicate_pending_invitation':
+      return t('duplicateInvitation')
+    case 'email_only':
+      return t('invitationEmailOnly')
+    case 'invalid_email':
+    case 'invalid_full_name':
+      return t('invalidInviteDetails')
     case 'invitation_email_failed':
-    case 'otp_delivery_failed':
+    case 'invitation_create_failed':
+    case 'invitation_lookup_failed':
       return t('inviteDeliveryFailed')
     case 'rate_limited':
-    case 'otp_rate_limited':
       return t('tooManyRequests')
     case 'institution_inactive':
       return t('inactive')
     case 'institution_required':
     case 'institution_not_found':
       return t('institutionRequired')
-    case 'profile_update_failed':
-      return t('profileUpdateFailed')
-    case 'institution_forbidden':
-    case 'role_not_allowed':
+    case 'active_profile_required':
     case 'insufficient_role':
+    case 'role_not_allowed':
     case 'self_invitation_forbidden':
+    case 'institution_forbidden':
       return t('noPermission')
     case 'different_institution':
-      return t('otpDifferentInstitution')
+      return t('invitationDifferentInstitution')
     case 'account_suspended':
       return t('suspendedMsg')
     default:
@@ -841,9 +950,10 @@ function inviteErrorMessage(code: string, t: T): string {
   }
 }
 
-function inviteSuccessMessage(payload: FunctionPayload | null, useOtp: boolean, t: T): string {
-  if (payload?.message === 'existing_account_pending') return t('existingAccountPending')
-  return useOtp ? t('otpSent') : t('inviteSent')
+function inviteSuccessMessage(payload: FunctionPayload | null, t: T): string {
+  if (payload?.message === 'existing_account_sign_in') return t('inviteExistingActive')
+  if (payload?.message === 'existing_account_pending') return t('inviteExistingPending')
+  return t('inviteCreated')
 }
 
 function reviewErrorMessage(code: string, t: T): string {
@@ -896,141 +1006,182 @@ async function reviewAccount(
   return { ok: result.ok === true, error: result.error, account_status: result.account_status }
 }
 
-/** The invitee — never the inviter — redeems the code from their own session. */
-function OtpCodeForm({ t, onAccepted }: { t: T; onAccepted: () => void }) {
-  const [code, setCode] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  async function submit(e: FormEvent) {
-    e.preventDefault()
-    if (busy) return
-    if (!/^\d{6}$/.test(code)) { notify(t('invalidOtp')); return }
-    if (!isConfigured) { notify(t('configMissing')); return }
-    setBusy(true)
-    const { data, error } = await supabase.functions.invoke('verify-otp', {
-      body: { otp_code: code },
-    })
-    setBusy(false)
-    const payload = data as FunctionPayload | null
-    const errorCode = payload?.error || await functionErrorCode(error)
-    if (error || errorCode) {
-      notify(otpErrorMessage(errorCode, t))
-      return
-    }
-    setCode('')
-    notify(t('otpVerified'))
-    onAccepted()
+function invitationAcceptError(raw: string, t: T): string {
+  const code = raw.toLowerCase()
+  if (code.includes('expired')) return t('invitationExpired')
+  if (code.includes('recipient_mismatch') || code.includes('email_required')) return t('invitationRecipientMismatch')
+  if (code.includes('different_institution')) return t('invitationDifferentInstitution')
+  if (code.includes('account_suspended')) return t('suspendedMsg')
+  if (code.includes('not_pending') || code.includes('not_found') || code.includes('already')) {
+    return t('invitationAlreadyHandled')
   }
-
-  return (
-    <form className="otp-form" onSubmit={submit}>
-      <p className="muted">{t('otpVerificationHint')}</p>
-      <label>{t('otpCode')}
-        <input
-          required
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          pattern="[0-9]{6}"
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-        />
-      </label>
-      <button className="primary full" disabled={busy || code.length !== 6}>
-        {busy ? t('verifyingOtp') : t('verifyOtp')}
-      </button>
-      <small className="muted">{t('otpPendingReviewHint')}</small>
-    </form>
-  )
+  return t('invitationAcceptFailed')
 }
 
 /**
- * Shows the OTP form only when the signed-in account actually has a live
- * invitation. The old gate offered the form to every pending/missing account,
- * so users without an invitation entered codes forever. The invitation is read
- * through my_pending_invitation(), which can only return the caller's own row.
+ * The invitee accepts the live invitation that belongs to their own signed-in
+ * email. `my_pending_invitation()` can only return the caller's row and
+ * `accept_email_invitation()` performs every server-side check. Accepting
+ * never activates the account: it stays pending until Owner/Manager review.
  */
-function InvitationOtpPanel({ t, onAccepted }: { t: T; onAccepted: () => void }) {
+function EmailInvitationPanel({ t, onAccepted }: { t: T; onAccepted: () => void }) {
   const [invitation, setInvitation] = useState<PendingInvitation | null>(null)
   const [checking, setChecking] = useState(true)
-  const [checkError, setCheckError] = useState('')
+  const [checkError, setCheckError] = useState(false)
+  const [accepting, setAccepting] = useState(false)
   const [accepted, setAccepted] = useState(false)
 
   useEffect(() => {
     if (!isConfigured) { setChecking(false); return }
     let alive = true
     setChecking(true)
-    setCheckError('')
+    setCheckError(false)
     supabase.rpc('my_pending_invitation').then(({ data, error }) => {
       if (!alive) return
-      if (error) setCheckError(error.message)
+      if (error) setCheckError(true)
       else setInvitation((data as PendingInvitation | null) ?? null)
       setChecking(false)
     })
     return () => { alive = false }
   }, [])
 
-  if (accepted) return <p className="muted">{t('awaitingApproval')}</p>
-  if (checking) return <p className="muted">{t('loading')}</p>
-  if (checkError) return <p className="muted">{t('edgeUnreachable')}</p>
-  if (!invitation) return <p className="muted">{t('noLiveInvitation')}</p>
+  async function accept() {
+    if (!invitation || accepting) return
+    if (!isConfigured) { notify(t('configMissing')); return }
+    setAccepting(true)
+    const { data, error } = await supabase.rpc('accept_email_invitation', {
+      p_invitation_id: invitation.id,
+    })
+    setAccepting(false)
+    const result = data as { ok?: boolean; error?: string } | null
+    if (error || result?.ok === false) {
+      notify(invitationAcceptError(result?.error || error?.message || '', t))
+      return
+    }
+    setAccepted(true)
+    setInvitation(null)
+    notify(t('invitationAcceptedOk'))
+    onAccepted()
+  }
+
+  if (accepted) {
+    return (
+      <div className="invite-state success" role="status">
+        <span className="invite-state-icon"><Check size={22} /></span>
+        <div>
+          <b>{t('invitationAcceptedOk')}</b>
+          <p className="muted">{t('awaitingApproval')}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (checking) {
+    return <div className="invite-state"><span className="invite-state-icon"><ShieldCheck size={20} /></span><p className="muted">{t('loading')}</p></div>
+  }
+
+  if (checkError) {
+    return (
+      <div className="invite-state" role="alert">
+        <span className="invite-state-icon"><ShieldCheck size={20} /></span>
+        <div><b>{t('edgeUnreachable')}</b><p className="muted">{t('invitationRetryHint')}</p></div>
+      </div>
+    )
+  }
+
+  if (!invitation) {
+    return (
+      <div className="invite-state">
+        <span className="invite-state-icon"><ShieldCheck size={20} /></span>
+        <div>
+          <b>{t('noLiveInvitation')}</b>
+          <p className="muted">{t('invitationSignInHint')}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <>
-      <div className="notice-box">
-        <b>{t(invitation.role)}</b>
-        {invitation.institution_name ? ` · ${invitation.institution_name}` : ''}
-        {invitation.expires_at && (
-          <div><small>{t('otpExpiresIn')} {formatDateTime(invitation.expires_at)}</small></div>
-        )}
+    <div className="invite-card">
+      <div className="invite-card-head">
+        <span className="invite-seal"><ShieldCheck size={21} /></span>
+        <div className="grow">
+          <span className="eyebrow">{t('pendingInvitation')}</span>
+          <h3>{t(invitation.role)}</h3>
+        </div>
+        <span className="pill warning">{t('pending')}</span>
       </div>
-      <OtpCodeForm
-        t={t}
-        onAccepted={() => {
-          setAccepted(true)
-          onAccepted()
-        }}
-      />
-    </>
+      <dl className="invite-meta">
+        <div>
+          <dt>{t('institution')}</dt>
+          <dd>{invitation.institution_name || '—'}</dd>
+        </div>
+        <div>
+          <dt>{t('email')}</dt>
+          <dd dir="ltr">{invitation.invited_email || '—'}</dd>
+        </div>
+        <div>
+          <dt>{t('expiresAt')}</dt>
+          <dd>{invitation.expires_at ? formatDateTime(invitation.expires_at) : '—'}</dd>
+        </div>
+      </dl>
+      <p className="muted">{t('invitationAcceptHint')}</p>
+      <button className="primary full" onClick={() => { void accept() }} disabled={accepting}>
+        {accepting ? t('acceptingInvitation') : t('acceptInvitationAction')}
+      </button>
+      <small className="secure-note"><ShieldCheck size={14} /> {t('invitationNoActivation')}</small>
+    </div>
   )
 }
 
-function GateScreen({ state, t, onRetry, onSignOut, onAccepted }: {
+function GateScreen({ state, t, onRetry, onSignOut, onAccepted, notice }: {
   state: GateState
   t: T
   onRetry: () => void
   onSignOut: () => void
   onAccepted: () => void
+  notice?: string
 }) {
-  const canRedeem = state === 'pending' || state === 'missing'
+  const canAccept = state === 'pending' || state === 'missing'
   return (
     <div className="login-wrap">
-      <section className="login-card">
-        <div className="login-brand">
-          <img src="/icons/brand-emblem.png" alt="T" className="brand-mark big" style={{objectFit:"cover",padding:0}} />
-          <h1 className="app-name">
-            <span className="arabic">{t('app')}</span>
-            <span className="latin">{t('subtitle')}</span>
-          </h1>
-        </div>
-        <h2>{t(gateTitleKey(state))}</h2>
-        <p className="muted">{t(gateBodyKey(state))}</p>
-        {canRedeem && <InvitationOtpPanel key={state} t={t} onAccepted={onAccepted} />}
-        {gateAllowsRetry(state) && (
-          <button className="primary full" onClick={onRetry}>{t('retry')}</button>
-        )}
-        <button className="secondary full" onClick={onSignOut}>{t('logout')}</button>
-      </section>
+      <div className="login-stage gate-stage">
+        <section className="login-card gate-card">
+          <div className="login-brand">
+            <img src="/icons/brand-emblem.png" alt="THE TRAINERS" className="brand-mark big" />
+            <h1 className="app-name">
+              <span className="arabic">{t('app')}</span>
+              <span className="latin">{t('subtitle')}</span>
+            </h1>
+          </div>
+          <h2>{t(gateTitleKey(state))}</h2>
+          <p className="muted">{t(gateBodyKey(state))}</p>
+          {notice && <div className="error-box" role="alert">{notice}</div>}
+          {canAccept && <EmailInvitationPanel key={state} t={t} onAccepted={onAccepted} />}
+          {gateAllowsRetry(state) && (
+            <button className="primary full" onClick={onRetry}>{t('retry')}</button>
+          )}
+          <button className="secondary full" onClick={onSignOut}>{t('logout')}</button>
+        </section>
+      </div>
     </div>
   )
 }
 
-function AcceptInvitation({ t, onAccepted }: { t: T; onAccepted: () => void }) {
+function AcceptInvitation({ t, profile, onAccepted }: {
+  t: T
+  profile: Profile
+  onAccepted: () => void
+}) {
   return (
     <>
       <Heading title={t('acceptInvitationTitle')} subtitle={t('acceptInvitationHint')} />
-      <section className="panel">
-        <InvitationOtpPanel t={t} onAccepted={onAccepted} />
+      <section className="panel invite-page">
+        <div className="invite-signed-in">
+          <span className="eyebrow">{t('signedInAs')}</span>
+          <b dir="ltr">{profile.email}</b>
+        </div>
+        <EmailInvitationPanel t={t} onAccepted={onAccepted} />
       </section>
     </>
   )
@@ -1115,9 +1266,42 @@ function Dashboard({ profile, t }: { profile: Profile; t: T }) {
     return () => { alive = false }
   }, [profile.id, profile.role, profile.institution_id])
 
+  const quickLinks: [string, LucideIcon, string][] = profile.role === 'owner'
+    ? [
+        ['/owner', Building2, 'ownerConsole'],
+        ['/audit', History, 'audit'],
+      ]
+    : profile.role === 'coach'
+      ? [
+          ['/students', Users, 'students'],
+          ['/attendance', CalendarDays, 'attendance'],
+          ['/reports', ClipboardList, 'reports'],
+          ['/messages', MessageCircle, 'messages'],
+        ]
+      : [
+          ['/students', Users, 'students'],
+          ['/reports', ClipboardList, 'reports'],
+          ['/team', UserPlus, 'team'],
+          ['/notices', Bell, 'notices'],
+        ]
+
   return (
     <>
-      <Heading title={t('home')} subtitle={`${t('welcome')} · ${profile.full_name || profile.email || t('offline')}`} />
+      <section className="hero-panel">
+        <div className="hero-emblem"><img src="/icons/brand-emblem.png" alt="" /></div>
+        <div className="hero-copy">
+          <span className="eyebrow">{t('subtitle')}</span>
+          <h1>{t('welcome')}{profile.full_name ? `، ${profile.full_name}` : ''}</h1>
+          <p className="hero-body">{t('heroBody')}</p>
+        </div>
+        <div className="hero-tags">
+          <span className="pill success">{roleLabel(profile.role, t)}</span>
+          <span className={`pill ${profile.account_status === 'active' ? 'success' : 'warning'}`}>
+            {t(profile.account_status || 'pending')}
+          </span>
+        </div>
+      </section>
+      {profile.role !== 'owner' && <PendingInvitationNotice t={t} />}
       {errorKey && <div className="error-box">{t(errorKey)}</div>}
       <div className="stats-grid">
         <Stat icon={Users} label={t('statsStudents')} value={stats.students} />
@@ -1126,6 +1310,15 @@ function Dashboard({ profile, t }: { profile: Profile; t: T }) {
         {profile.role !== 'coach' && <Stat icon={UserPlus} label={t('statsTeam')} value={stats.team} />}
       </div>
       {profile.role === 'coach' && <ShiftCard profile={profile} t={t} />}
+      <nav className="quick-links" aria-label={t('quickLinks')}>
+        {quickLinks.map(([to, Icon, key]) => (
+          <NavLink to={to} key={to}>
+            <span className="quick-icon"><Icon size={19} /></span>
+            <span>{t(key)}</span>
+            <ChevronLeft size={16} className="nav-arrow" />
+          </NavLink>
+        ))}
+      </nav>
       <section className="panel">
         <div className="panel-head"><h3>{t('reports')}</h3><span className="muted">{t('today')}</span></div>
         {loading ? <Empty t={t} /> : recent.length === 0 ? <Empty t={t} /> : (
@@ -1143,6 +1336,34 @@ function Dashboard({ profile, t }: { profile: Profile; t: T }) {
         )}
       </section>
     </>
+  )
+}
+
+/** A quiet dashboard banner when the signed-in person still has a live invitation. */
+function PendingInvitationNotice({ t }: { t: T }) {
+  const [invitation, setInvitation] = useState<PendingInvitation | null>(null)
+
+  useEffect(() => {
+    if (!isConfigured) return
+    let alive = true
+    supabase.rpc('my_pending_invitation').then(({ data }) => {
+      if (alive) setInvitation((data as PendingInvitation | null) ?? null)
+    })
+    return () => { alive = false }
+  }, [])
+
+  if (!invitation) return null
+
+  return (
+    <NavLink className="pending-invite-banner" to="/accept-invitation">
+      <span className="pending-invite-icon"><ShieldCheck size={20} /></span>
+      <span className="grow">
+        <b>{t('pendingInvitationNotice')}</b>
+        <small>{t(invitation.role)}{invitation.institution_name ? ` · ${invitation.institution_name}` : ''}</small>
+      </span>
+      <span className="pill warning">{t('reviewPendingInvitation')}</span>
+      <ChevronLeft size={18} className="nav-arrow" />
+    </NavLink>
   )
 }
 
@@ -3219,23 +3440,34 @@ function InvitationList({ items, t, institutionNames }: {
   t: T
   institutionNames?: Record<string, string>
 }) {
+  const pendingCount = items.filter((item) => item.status === 'pending').length
   return (
-    <section className="panel">
-      <h3>{t('invitations')}</h3>
+    <section className="panel invitations-panel">
+      <div className="panel-head">
+        <h3>{t('invitations')}</h3>
+        <span className="pill warning">{pendingCount} · {t('pendingInvitations')}</span>
+      </div>
+      <p className="muted">{t('invitationEmailOnlyHint')}</p>
       {items.length === 0 ? <Empty t={t} /> : items.map((item) => (
-        <div className="student-row" key={item.id}>
+        <div className="invitation-row" key={item.id}>
           <div className="avatar">{(item.invited_name || item.invited_email || '?').slice(0, 1)}</div>
           <div className="grow">
             <b>{item.invited_name || item.invited_email || '—'}</b>
-            <small>
-              {item.invited_email || '—'} · {t(item.role)}
-              {institutionNames?.[item.institution_id] ? ` · ${institutionNames[item.institution_id]}` : ''}
-            </small>
+            <small dir="ltr">{item.invited_email || '—'}</small>
+            <div className="invite-row-tags">
+              <span className="tag">{t(item.role)}</span>
+              {institutionNames?.[item.institution_id] && <span className="tag">{institutionNames[item.institution_id]}</span>}
+              <span className="tag email"><ShieldCheck size={12} /> {t('emailOnlyBadge')}</span>
+            </div>
           </div>
-          <span className={`pill ${item.status === 'accepted' ? 'success' : item.status === 'pending' ? 'warning' : 'danger'}`}>
-            {invitationStatusLabel(item.status, t)}
-          </span>
-          <small className="muted">{t('expiresAt')} {formatDateTime(item.expires_at)}</small>
+          <div className="invite-row-end">
+            <span className={`pill ${item.status === 'accepted' ? 'success' : item.status === 'pending' ? 'warning' : 'danger'}`}>
+              {invitationStatusLabel(item.status, t)}
+            </span>
+            {item.status === 'pending' && (
+              <small className="muted">{t('expiresAt')} {formatDateTime(item.expires_at)}</small>
+            )}
+          </div>
         </div>
       ))}
     </section>
@@ -3398,8 +3630,6 @@ function OwnerConsole({ profile, t }: { profile: Profile; t: T }) {
   const [fullName, setFullName] = useState('')
   const [institution, setInstitution] = useState('')
   const [role, setRole] = useState<AccountRole>('manager')
-  const [deliveryMethod, setDeliveryMethod] = useState<'email' | 'whatsapp' | 'sms'>('email')
-  const [phone, setPhone] = useState('')
   const [busy, setBusy] = useState(false)
   const [syncBusy, setSyncBusy] = useState(false)
 
@@ -3444,7 +3674,6 @@ function OwnerConsole({ profile, t }: { profile: Profile; t: T }) {
     if (!isConfigured) { notify(t('configMissing')); return }
     if (!institution) { notify(t('institutionRequired')); return }
     if (!canInvite('owner', role)) { notify(t('noPermission')); return }
-    const useOtp = deliveryMethod !== 'email'
     setBusy(true)
     const { data, error } = await supabase.functions.invoke('invite-user', {
       body: {
@@ -3452,19 +3681,15 @@ function OwnerConsole({ profile, t }: { profile: Profile; t: T }) {
         full_name: fullName.trim(),
         role,
         institution_id: institution,
-        delivery_method: deliveryMethod,
-        phone: useOtp ? phone : undefined,
-        use_otp: useOtp,
       },
     })
     setBusy(false)
     const payload = data as FunctionPayload | null
     const errorCode = payload?.error || await functionErrorCode(error)
     if (error || errorCode) { notify(inviteErrorMessage(errorCode, t)); return }
-    notify(useOtp ? t('otpSent') : t('inviteSent'))
+    notify(inviteSuccessMessage(payload, t))
     setEmail('')
     setFullName('')
-    setPhone('')
     await load()
   }
 
@@ -3508,8 +3733,8 @@ function OwnerConsole({ profile, t }: { profile: Profile; t: T }) {
       </section>
       <section className="panel">
         <h3>{t('invite')}</h3>
-        <p className="muted">{t('reviewAccountsHint')}</p>
-        <form onSubmit={inviteMember}>
+        <p className="muted">{t('inviteHint')}</p>
+        <form className="invite-form" onSubmit={inviteMember}>
           <label>{t('institution')}
             <select required value={institution} onChange={(e) => setInstitution(e.target.value)}>
               <option value="">—</option>
@@ -3517,24 +3742,16 @@ function OwnerConsole({ profile, t }: { profile: Profile; t: T }) {
             </select>
           </label>
           <label>{t('name')}<input required value={fullName} onChange={(e) => setFullName(e.target.value)} /></label>
-          <label>{t('email')}<input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+          <label>{t('email')}<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
           <label>{t('role')}
             <select value={role} onChange={(e) => setRole(e.target.value as AccountRole)}>
               {INVITE_MATRIX.owner.map((item) => <option key={item} value={item}>{t(item)}</option>)}
             </select>
           </label>
-          <label>{t('deliveryMethod')}
-            <select value={deliveryMethod} onChange={(e) => setDeliveryMethod(e.target.value as 'email' | 'whatsapp' | 'sms')}>
-              <option value="email">{t('email')}</option>
-              <option value="whatsapp">{t('whatsapp')}</option>
-              <option value="sms">{t('sms')}</option>
-            </select>
-          </label>
-          {deliveryMethod !== 'email' && (
-            <label>{t('phone')}
-              <input required type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-            </label>
-          )}
+          <div className="form-note">
+            <ShieldCheck size={15} />
+            <span>{t('inviteEmailOnlyNote')}</span>
+          </div>
           <button className="primary" disabled={busy}>{busy ? t('sendingInvite') : t('sendInvite')}</button>
         </form>
       </section>
@@ -3597,13 +3814,12 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState<AccountRole>('coach')
-  const [deliveryMethod, setDeliveryMethod] = useState<'email' | 'whatsapp' | 'sms'>('email')
-  const [phone, setPhone] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [reviewingId, setReviewingId] = useState('')
-  const isDirector = profile.role === 'manager'
   const inviteRoles = INVITE_MATRIX[profile.role]
+  const canInviteHere = inviteRoles.length > 0
+  const canSeeInvitations = profile.role === 'manager' || profile.role === 'admin'
 
   // The server repeats every one of these checks inside review_account(); the
   // UI mirrors them so the Director never sees a button that would fail. The
@@ -3624,7 +3840,7 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
         .select('*')
         .eq('institution_id', profile.institution_id)
         .order('created_at', { ascending: false }),
-      isDirector
+      canSeeInvitations
         ? supabase
           .from('invitations')
           .select('id,invited_email,invited_name,role,institution_id,status,delivery_method,expires_at,created_at')
@@ -3645,9 +3861,8 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
   async function invite(e: FormEvent) {
     e.preventDefault()
     if (!isConfigured) { notify(t('configMissing')); return }
-    if (!isDirector || !profile.institution_id) { notify(t('noPermission')); return }
+    if (!canInviteHere || !profile.institution_id) { notify(t('noPermission')); return }
     if (!canInvite(profile.role, role)) { notify(t('noPermission')); return }
-    const useOtp = deliveryMethod !== 'email'
     setBusy(true)
     const { data, error } = await supabase.functions.invoke('invite-user', {
       body: {
@@ -3655,19 +3870,15 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
         full_name: fullName.trim(),
         role,
         institution_id: profile.institution_id,
-        delivery_method: deliveryMethod,
-        phone: useOtp ? phone.trim() : undefined,
-        use_otp: useOtp,
       },
     })
     setBusy(false)
     const payload = data as FunctionPayload | null
     const errorCode = payload?.error || await functionErrorCode(error)
     if (error || errorCode) { notify(inviteErrorMessage(errorCode, t)); return }
-    notify(useOtp ? t('otpSent') : t('inviteSent'))
+    notify(inviteSuccessMessage(payload, t))
     setEmail('')
     setFullName('')
-    setPhone('')
     await load()
   }
 
@@ -3682,36 +3893,33 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
     await load()
   }
 
+  const canReviewAny = profile.role === 'manager'
+
   return (
     <>
       <Heading
         title={t('team')}
-        subtitle={isDirector ? t('institutionConsole') : t('readOnlyAccounts')}
+        subtitle={canInviteHere ? t('institutionConsole') : t('readOnlyAccounts')}
       />
-      {isDirector ? (
+      {canInviteHere ? (
         <section className="panel">
-          <h3>{t('invite')}</h3>
-          <p className="muted">{t('inviteHint')}</p>
-          <form onSubmit={invite}>
+          <div className="panel-head">
+            <h3>{t('invite')}</h3>
+            <span className="pill success">{t('emailOnlyBadge')}</span>
+          </div>
+          <p className="muted">{profile.role === 'admin' ? t('adminInviteHint') : t('inviteHint')}</p>
+          <form className="invite-form" onSubmit={invite}>
             <label>{t('name')}<input required value={fullName} onChange={(e) => setFullName(e.target.value)} /></label>
-            <label>{t('email')}<input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+            <label>{t('email')}<input required type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
             <label>{t('role')}
               <select value={role} onChange={(e) => setRole(e.target.value as AccountRole)}>
                 {inviteRoles.map((item) => <option key={item} value={item}>{t(item)}</option>)}
               </select>
             </label>
-            <label>{t('deliveryMethod')}
-              <select value={deliveryMethod} onChange={(e) => setDeliveryMethod(e.target.value as 'email' | 'whatsapp' | 'sms')}>
-                <option value="email">{t('email')}</option>
-                <option value="whatsapp">{t('whatsapp')}</option>
-                <option value="sms">{t('sms')}</option>
-              </select>
-            </label>
-            {deliveryMethod !== 'email' && (
-              <label>{t('phone')}
-                <input required type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
-              </label>
-            )}
+            <div className="form-note">
+              <ShieldCheck size={15} />
+              <span>{t('inviteEmailOnlyNote')}</span>
+            </div>
             <button className="primary" disabled={busy}>{busy ? t('sendingInvite') : t('sendInvite')}</button>
           </form>
         </section>
@@ -3722,8 +3930,11 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
         </section>
       )}
       <section className="panel">
-        <h3>{t('manageAccounts')}</h3>
-        <p className="muted">{t('reviewAccountsHint')}</p>
+        <div className="panel-head">
+          <h3>{t('manageAccounts')}</h3>
+          <span className="muted">{items.length}</span>
+        </div>
+        <p className="muted">{canReviewAny ? t('reviewAccountsHint') : t('adminReviewHint')}</p>
         {loading ? <Empty t={t} /> : items.length === 0 ? <Empty t={t} /> : items.map((person) => {
           const status = person.account_status || 'pending'
           const canReview = canReviewPerson(person)
@@ -3757,7 +3968,7 @@ function Team({ profile, t }: { profile: Profile; t: T }) {
           )
         })}
       </section>
-      {isDirector && <InvitationList items={invitations} t={t} />}
+      {canSeeInvitations && <InvitationList items={invitations} t={t} />}
     </>
   )
 }

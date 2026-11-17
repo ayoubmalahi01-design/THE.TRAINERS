@@ -16,10 +16,10 @@ import {
 
 const ROLES = ['owner', 'manager', 'admin', 'coach'] as const
 
-test('only Owner and Director may invite anybody', () => {
+test('every role invites exactly the targets the matrix allows', () => {
   assert.deepEqual(INVITE_MATRIX.owner, ['manager', 'admin', 'coach'])
   assert.deepEqual(INVITE_MATRIX.manager, ['admin', 'coach'])
-  assert.deepEqual(INVITE_MATRIX.admin, [])
+  assert.deepEqual(INVITE_MATRIX.admin, ['coach'])
   assert.deepEqual(INVITE_MATRIX.coach, [])
 })
 
@@ -43,17 +43,30 @@ test('canInvite matches the matrix exactly', () => {
   }
 })
 
-test('Administration and Coach cannot invite, approve or manage accounts', () => {
-  for (const actor of ['admin', 'coach'] as const) {
-    assert.equal(canManageAccounts(actor), false)
-    for (const target of ROLES) {
-      assert.equal(canInvite(actor, target), false, `${actor} must not invite ${target}`)
-      assert.equal(
-        canReviewAccount(actor, target, true),
-        false,
-        `${actor} must not review ${target}`,
-      )
-    }
+test('Administration invites coaches only and never reviews or manages accounts', () => {
+  assert.equal(canManageAccounts('admin'), false)
+  assert.equal(canInvite('admin', 'coach'), true)
+  for (const target of ['owner', 'manager', 'admin'] as const) {
+    assert.equal(canInvite('admin', target), false, `admin must not invite ${target}`)
+  }
+  for (const target of ROLES) {
+    assert.equal(
+      canReviewAccount('admin', target, true),
+      false,
+      `admin must not review ${target}`,
+    )
+  }
+})
+
+test('Coach cannot invite, approve or manage accounts', () => {
+  assert.equal(canManageAccounts('coach'), false)
+  for (const target of ROLES) {
+    assert.equal(canInvite('coach', target), false, `coach must not invite ${target}`)
+    assert.equal(
+      canReviewAccount('coach', target, true),
+      false,
+      `coach must not review ${target}`,
+    )
   }
 })
 

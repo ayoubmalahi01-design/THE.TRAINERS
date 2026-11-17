@@ -1,15 +1,18 @@
 {
-  "name": "The Trainers — تدريب",
+  "id": "/",
+  "name": "THE TRAINERS — تدريب",
   "short_name": "تدريب",
-  "description": "منصة إدارة المؤسسات والمدربين: الحضور والتقارير ومتابعة التلاميذ.",
+  "description": "منصة تونسية احترافية لإدارة المؤسسات الرياضية والمدربين: التلاميذ، الحضور، التقارير، الملفات الطبية والتواصل المؤسسي.",
   "lang": "ar",
   "dir": "rtl",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0f1210",
-  "theme_color": "#102a24",
-  "orientation": "portrait",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#0d1512",
+  "theme_color": "#14251d",
+  "orientation": "any",
+  "categories": ["sports", "education", "productivity"],
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -24,7 +27,7 @@
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-512.png",
+      "src": "/icons/icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

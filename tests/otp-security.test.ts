@@ -177,10 +177,11 @@ test('no function response contains an OTP or its hash', () => {
   }
 })
 
-test('invite-user keeps the email path and never returns the code', () => {
+test('invite-user is email-only and never returns a code', () => {
   assert.match(invite, /inviteUserByEmail/)
-  assert.match(invite, /use_otp/)
-  assert.match(invite, /message: 'otp_sent'/)
+  assert.match(invite, /delivery_method:\s*'email'/)
+  assert.match(invite, /email_only/)
+  assert.doesNotMatch(invite, /use_otp\s*=\s*true|message: 'otp_sent'/)
   assert.doesNotMatch(invite, /json\(req,\s*\{[^}]*otp_code/s)
 })
 
@@ -201,7 +202,9 @@ test('internal senders authenticate with a shared secret, not a browser JWT', ()
     assert.match(source, /preflight\(req, false\)/)
     assert.doesNotMatch(source, /Authorization/)
   }
-  assert.match(invite, /'x-internal-secret': deliverySecret/)
+  // Invitations no longer call the delivery functions at all, so the invite
+  // function must not carry the shared delivery secret.
+  assert.doesNotMatch(invite, /x-internal-secret/)
 })
 
 test('JWT settings match the intended callers', () => {
@@ -211,10 +214,11 @@ test('JWT settings match the intended callers', () => {
   assert.match(config, /\[functions\.send-sms\][\s\S]*?verify_jwt\s*=\s*false/)
 })
 
-test('the invitee redeems the code from their own session', () => {
-  assert.match(app, /functions\.invoke\('verify-otp',\s*\{\s*body:\s*\{\s*otp_code:\s*code\s*\}/)
-  assert.doesNotMatch(app, /invoke\('verify-otp'[^)]*invitation_id/s)
-  assert.match(app, /function OtpCodeForm/)
+test('the invitee accepts the live invitation from their own session', () => {
+  assert.match(app, /rpc\('my_pending_invitation'\)/)
+  assert.match(app, /rpc\('accept_email_invitation',\s*\{\s*p_invitation_id:\s*invitation\.id\s*,?\s*\}/)
+  assert.doesNotMatch(app, /invoke\('verify-otp'/)
+  assert.doesNotMatch(app, /function OtpCodeForm/)
   assert.match(app, /path="\/accept-invitation"/)
   assert.doesNotMatch(app, /otpVerificationOpen|pendingInvitationId/)
 })
@@ -222,7 +226,7 @@ test('the invitee redeems the code from their own session', () => {
 test('the role matrix cannot produce an owner', () => {
   assert.match(invite, /owner:\s*\['manager',\s*'admin',\s*'coach'\]/)
   assert.match(invite, /manager:\s*\['admin',\s*'coach'\]/)
-  assert.match(invite, /admin:\s*\[\]/)
+  assert.match(invite, /admin:\s*\['coach'\]/)
   assert.match(invite, /coach:\s*\[\]/)
   assert.match(invite, /role === 'owner'/)
 })
@@ -244,7 +248,7 @@ test('public configuration examples contain placeholders only', () => {
   assert.doesNotMatch(envExample, /SERVICE_ROLE_KEY/)
 })
 
-test('every new OTP message exists in all three languages', () => {
+test('every invitation and OTP message exists in all three languages', () => {
   const keys = [
     'otpCode',
     'otpTooMany',
@@ -256,6 +260,15 @@ test('every new OTP message exists in all three languages', () => {
     'acceptInvitation',
     'acceptInvitationTitle',
     'acceptInvitationHint',
+    'acceptInvitationAction',
+    'acceptingInvitation',
+    'invitationAcceptedOk',
+    'invitationNoActivation',
+    'invitationEmailOnly',
+    'pendingInvitation',
+    'emailOnlyBadge',
+    'duplicateInvitation',
+    'inviteCreated',
     'alreadyRegistered',
     'invalidPhone',
     'inviteDeliveryFailed',

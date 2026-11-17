@@ -46,7 +46,7 @@ function functionBody(source: string, name: string, nextName: string): string {
 test('the Edge Function matrix is identical to the browser policy', () => {
   assert.match(inviteFunction, /owner:\s*\[\s*'manager',\s*'admin',\s*'coach'\s*\]/)
   assert.match(inviteFunction, /manager:\s*\[\s*'admin',\s*'coach'\s*\]/)
-  assert.match(inviteFunction, /admin:\s*\[\s*\]/)
+  assert.match(inviteFunction, /admin:\s*\[\s*'coach'\s*\]/)
   assert.match(inviteFunction, /coach:\s*\[\s*\]/)
   for (const actor of Object.keys(INVITE_MATRIX) as (keyof typeof INVITE_MATRIX)[]) {
     for (const target of ASSIGNABLE_ROLES) {
@@ -55,7 +55,7 @@ test('the Edge Function matrix is identical to the browser policy', () => {
   }
 })
 
-test('Administration and Coach have no invitation path in the Edge Function', () => {
+test('Coach has no invitation path in the Edge Function', () => {
   assert.doesNotMatch(inviteFunction, /Coaches may invite coaches only/)
   assert.doesNotMatch(inviteFunction, /isCoach\s*&&\s*role\s*!==\s*'coach'/)
   assert.match(inviteFunction, /role_not_allowed/)
@@ -69,13 +69,14 @@ test('email invitations always stay pending until a human review', () => {
   assert.doesNotMatch(inviteFunction, /approved_by:\s*autoActive/)
 })
 
-test('the email profile write is verified instead of trusting a silent zero-row update', () => {
-  assert.match(
-    inviteFunction,
-    /\.upsert\(\{[\s\S]*?\}\s*,\s*\{\s*onConflict:\s*'id'\s*\}\)\s*\.select\('id'\)\s*\.single\(\)/,
-  )
-  assert.match(inviteFunction, /profileError\s*\|\|\s*!profileRow/)
-  assert.match(inviteFunction, /profile_update_failed/)
+test('the Edge Function creates a pending email invitation and never mutates an existing profile', () => {
+  assert.match(inviteFunction, /delivery_method:\s*'email'/)
+  assert.match(inviteFunction, /status:\s*'pending'/)
+  assert.match(inviteFunction, /inviteUserByEmail/)
+  assert.match(inviteFunction, /\.from\('profiles'\)[\s\S]{0,120}?\.select\(/)
+  assert.doesNotMatch(inviteFunction, /\.from\('profiles'\)\s*\n?\s*\.upsert/)
+  assert.doesNotMatch(inviteFunction, /\.from\('profiles'\)\s*\n?\s*\.update/)
+  assert.doesNotMatch(inviteFunction, /use_otp:\s*true/)
 })
 
 test('OTP acceptance links the account but keeps new accounts pending', () => {
@@ -94,12 +95,15 @@ test('the OTP audit row records the resulting account status', () => {
   assert.match(invitations, /'account_status',\s*CASE[\s\S]*?ELSE 'pending'/)
 })
 
-test('invitation RLS is Owner/Director only', () => {
+test('the local invitation baseline grants Owner/Director read, and Admin sees invitations in the app', () => {
   const policy = block(invitations, 'CREATE POLICY invitations_select_admin', ');')
   assert.match(policy, /is_platform_owner\(\)/)
   assert.match(policy, /current_app_role\(\)\s*=\s*'manager'/)
-  assert.doesNotMatch(policy, /'admin'/)
-  assert.doesNotMatch(policy, /'coach'/)
+  // Production extends this baseline to Administration through the deployed
+  // email-invitation acceptance migration. The frontend must therefore expose
+  // the invitation list to Manager and Admin, but never allow them to write.
+  assert.match(app, /profile\.role === 'manager' \|\| profile\.role === 'admin'/)
+  assert.doesNotMatch(inviteFunction, /\.from\('invitations'\)\s*\n?\s*\.update\(\{[\s\S]{0,80}?invited_email/)
 })
 
 test('profile-update RLS is Owner/Director only and never lets a Director change roles', () => {
@@ -239,10 +243,14 @@ test('the Owner console reviews accounts through the RPC and can sync orphan pro
   assert.doesNotMatch(owner, /profiles'\)\.update/)
 })
 
-test('the pending gate offers OTP only for a real live invitation', () => {
+test('the pending gate accepts only the caller’s live email invitation, never an OTP', () => {
   assert.match(app, /my_pending_invitation/)
-  assert.match(app, /function InvitationOtpPanel/)
+  assert.match(app, /function EmailInvitationPanel/)
+  assert.match(app, /accept_email_invitation/)
+  assert.match(app, /p_invitation_id:\s*invitation\.id/)
   assert.match(app, /noLiveInvitation/)
+  assert.doesNotMatch(app, /function OtpCodeForm/)
+  assert.doesNotMatch(app, /invoke\('verify-otp'/)
   assert.doesNotMatch(app, /canRedeem && <OtpCodeForm/)
 })
 

@@ -7,7 +7,7 @@ export type AccountRole = 'owner' | 'manager' | 'admin' | 'coach'
 export const INVITE_MATRIX: Record<AccountRole, AccountRole[]> = {
   owner: ['manager', 'admin', 'coach'],
   manager: ['admin', 'coach'],
-  admin: [],
+  admin: ['coach'],
   coach: [],
 }
 
