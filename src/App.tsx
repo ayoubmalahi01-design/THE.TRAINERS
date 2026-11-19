@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
 import {
   Activity, Archive, Bell, Building2, CalendarDays, Check, ChevronLeft, ClipboardList,
-  FileUp, GraduationCap, HeartPulse, History, Home, Languages, LogOut, Menu,
+  FileUp, FileText, GraduationCap, HeartPulse, History, Home, Languages, LogOut, Menu,
   MessageCircle, Mic, NotebookPen, Paperclip, Pencil, Plus, Search, Send,
   Settings as SettingsIcon, ShieldCheck, Square, Trash2, UserPlus, Users, X,
   type LucideIcon,
@@ -561,6 +561,7 @@ export default function App() {
         ['/followups', Activity, 'absenceFollowups'],
         ['/daily-status', CalendarDays, 'dailyStatus'],
         ['/reports', ClipboardList, 'reports'],
+        ['/management-reports', FileText, 'managementReports'],
         ...(viewProfile.role === 'coach' ? [['/notebook', NotebookPen, 'notebook'] as [string, LucideIcon, string]] : []),
         ['/notices', Bell, 'notices'],
         ['/notifications', Bell, 'notifications', true],
@@ -670,11 +671,12 @@ export default function App() {
             <Route path="/" element={<Dashboard profile={viewProfile} t={t} />} />
             <Route path="/owner" element={owner ? <OwnerConsole profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/students" element={!owner ? <Students profile={viewProfile} t={t} /> : <Denied t={t} />} />
-            <Route path="/classes" element={admin && !owner ? <ClassManagement profile={viewProfile} t={t} /> : <Denied t={t} />} />
+            <Route path="/classes" element={!owner ? <ClassManagement profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/attendance" element={!owner ? <Attendance profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/followups" element={!owner ? <FollowUpQueue profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/daily-status" element={!owner ? <DailyStatus profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/reports" element={!owner ? <Reports profile={viewProfile} t={t} /> : <Denied t={t} />} />
+            <Route path="/management-reports" element={!owner ? <ManagementReports profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notebook" element={viewProfile.role === 'coach' ? <Notebook profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notices" element={!owner ? <Notices profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notifications" element={!owner ? <Notifications profile={viewProfile} t={t} /> : <Denied t={t} />} />
@@ -1423,6 +1425,8 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
   const [classes, setClasses] = useState<{ id: string; name: string; academic_year: string | null }[]>([])
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkText, setBulkText] = useState('')
+  const [bulkFileName, setBulkFileName] = useState('')
+  const [bulkReadStatus, setBulkReadStatus] = useState('')
   const [bulkBusy, setBulkBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [noteStudent, setNoteStudent] = useState<Student | null>(null)
@@ -1576,6 +1580,8 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
 
   async function readImportFile(file: File | null) {
     if (!file) return
+    setBulkFileName(file.name)
+    setBulkReadStatus(t('readingImportFile'))
     try {
       const name = file.name.toLowerCase()
       if (name.endsWith('.xlsx')) {
@@ -1589,14 +1595,19 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
           return String(cell ?? '')
         }).join('\t')).join('\n')
         setBulkText(text)
+        setBulkReadStatus(parseStudentImportText(text).length ? t('importFileRead') : t('importFileNoRows'))
         return
       }
       if (name.endsWith('.xls')) {
+        setBulkReadStatus(t('importXlsUnsupported'))
         notify(t('importXlsUnsupported'))
         return
       }
-      setBulkText(await file.text())
+      const text = await file.text()
+      setBulkText(text)
+      setBulkReadStatus(parseStudentImportText(text).length ? t('importFileRead') : t('importFileNoRows'))
     } catch {
+      setBulkReadStatus(t('importFailed'))
       notify(t('importFailed'))
     }
   }
@@ -1606,7 +1617,7 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
         title={t('students')}
         action={canManage && (
           <div className="heading-actions">
-            <button className="secondary action-btn" onClick={() => setBulkOpen(true)}>
+            <button className="secondary action-btn" onClick={() => { setBulkFileName(''); setBulkReadStatus(''); setBulkText(''); setBulkOpen(true) }}>
               <FileUp size={17} /> {t('importExcel')}
             </button>
             <button className="primary action-btn" onClick={openAdd}>
@@ -1675,6 +1686,7 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
             <input type="file" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(e) => { void readImportFile(e.target.files?.[0] ?? null); e.target.value = '' }} />
           </label>
+          {bulkFileName && <div className="notice-box"><b>{bulkFileName}</b><div>{bulkReadStatus || t('readingImportFile')}</div></div>}
           <label>{t('importPreview')}
             <textarea rows={4} value={bulkText} onChange={(e) => setBulkText(e.target.value)}
               placeholder={'student_code,full_name\n001,محمد علي\n002,سارة أحمد'} />
@@ -4129,128 +4141,97 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
   )
 }
 function ClassManagement({ profile, t }: { profile: Profile; t: T }) {
-  const [classes, setClasses] = useState<{ id: string; name: string; academic_year: string; description: string }[]>([])
+  type ClassRow = { id: string; name: string; academic_year: string | null; description: string | null }
+  const [classes, setClasses] = useState<ClassRow[]>([])
+  const [students, setStudents] = useState<Student[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [academicYear, setAcademicYear] = useState('')
   const [description, setDescription] = useState('')
-  const [editingClass, setEditingClass] = useState<{ id: string; name: string; academic_year: string; description: string } | null>(null)
+  const [editingClass, setEditingClass] = useState<ClassRow | null>(null)
   const [editName, setEditName] = useState('')
   const [editYear, setEditYear] = useState('')
   const [editDescription, setEditDescription] = useState('')
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const canManage = profile.role === 'manager' || profile.role === 'admin'
 
   async function load() {
     setLoading(true)
     if (!isConfigured || !profile.institution_id) { setLoading(false); return }
-    const { data, error } = await supabase
-      .from('classes')
-      .select('id,name,academic_year,description')
-      .order('name')
-    if (error) notify(error.message)
-    else setClasses(data ?? [])
+    const [classRes, studentRes] = await Promise.all([
+      supabase.from('classes').select('id,name,academic_year,description').eq('institution_id', profile.institution_id).order('name'),
+      supabase.from('students').select('id,student_code,full_name,is_active,class_id,date_of_birth').eq('institution_id', profile.institution_id).order('full_name'),
+    ])
+    if (classRes.error) notify(classRes.error.message)
+    if (studentRes.error) notify(studentRes.error.message)
+    setClasses((classRes.data ?? []) as ClassRow[])
+    setStudents((studentRes.data ?? []) as Student[])
     setLoading(false)
   }
-
-  useEffect(() => { void load() }, [profile.institution_id])
+  useEffect(() => { void load() }, [profile.institution_id, profile.id])
 
   async function create(e: FormEvent) {
     e.preventDefault()
-    if (!isConfigured || !profile.institution_id) { notify(t('configMissing')); return }
+    if (!canManage || !profile.institution_id) { notify(t('noPermission')); return }
     setBusy(true)
     const { error } = await supabase.from('classes').insert({ name: name.trim(), academic_year: academicYear.trim(), description: description.trim() || null, institution_id: profile.institution_id })
     setBusy(false)
     if (error) { notify(error.message); return }
-    notify(t('savedOk'))
-    setName(''); setAcademicYear(''); setDescription('')
-    await load()
+    notify(t('savedOk')); setName(''); setAcademicYear(''); setDescription(''); await load()
   }
-
   async function update(e: FormEvent, classId: string) {
     e.preventDefault()
-    if (!isConfigured || !profile.institution_id) { notify(t('configMissing')); return }
-    if (!editName.trim()) { notify(t('className')); return }
+    if (!canManage || !profile.institution_id || !editName.trim()) return
     setBusy(true)
-    const { data, error } = await supabase
-      .from('classes')
-      .update({
-        name: editName.trim(),
-        academic_year: editYear.trim() || null,
-        description: editDescription.trim() || null,
-      })
-      .eq('id', classId)
-      .eq('institution_id', profile.institution_id)
-      .select('id')
+    const { data, error } = await supabase.from('classes').update({ name: editName.trim(), academic_year: editYear.trim() || null, description: editDescription.trim() || null }).eq('id', classId).eq('institution_id', profile.institution_id).select('id')
     setBusy(false)
     if (error) { notify(error.message); return }
-    if (!affectedRows(data)) { notify(t('classUpdateFailed')); await load(); return }
-    notify(t('savedOk'))
-    setEditingClass(null)
-    setEditName(''); setEditYear(''); setEditDescription('')
-    await load()
+    if (!affectedRows(data)) { notify(t('classUpdateFailed')); return }
+    setEditingClass(null); await load()
   }
-
-  function startEdit(c: { id: string; name: string; academic_year: string; description: string }) {
-    setEditingClass(c)
-    // The form is controlled and hydrated from the row being edited; an
-    // uncontrolled `defaultValue` form would write empty strings back.
-    setEditName(c.name ?? '')
-    setEditYear(c.academic_year ?? '')
-    setEditDescription(c.description ?? '')
-  }
-
+  function startEdit(c: ClassRow) { setEditingClass(c); setEditName(c.name); setEditYear(c.academic_year || ''); setEditDescription(c.description || '') }
   async function remove(classId: string) {
-    if (!window.confirm(t('deleteClassConfirm'))) return
+    if (!canManage || !window.confirm(t('deleteClassConfirm'))) return
     setBusy(true)
-    const { data, error } = await supabase.from('classes').delete().eq('id', classId).select('id')
+    const { data, error } = await supabase.from('classes').delete().eq('id', classId).eq('institution_id', profile.institution_id).select('id')
     setBusy(false)
     if (error) { notify(error.message); return }
-    if (!affectedRows(data)) { notify(t('classDeleteFailed')); await load(); return }
-    notify(t('deleted'))
-    await load()
+    if (!affectedRows(data)) { notify(t('classDeleteFailed')); return }
+    if (selected === classId) setSelected(null)
+    notify(t('deleted')); await load()
   }
+  const selectedClass = classes.find(c => c.id === selected) || null
+  const members = selected ? students.filter(s => s.class_id === selected) : []
+  const unassigned = students.filter(s => !s.class_id || !classes.some(c => c.id === s.class_id))
 
-  return (
-    <>
-      <Heading title={t('classes')} />
-      <section className="panel">
-        <h3>{t('addClass')}</h3>
-        <form onSubmit={create}>
-          <label>{t('className')}<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label>{t('academicYear')}<input required value={academicYear} onChange={(e) => setAcademicYear(e.target.value)} /></label>
-          <label>{t('description')}<textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-          <button className="primary" disabled={busy}>{t('save')}</button>
-        </form>
-      </section>
-      <section className="panel">
-        <h3>{t('manageClasses')}</h3>
-        {loading ? <Empty t={t} /> : classes.length === 0 ? (
-          <p>{t('noClassesYet')}</p>
-        ) : classes.map((c) => (
-          <div key={c.id} className="student-row">
-            <div className="grow"><b>{c.name}</b><small>{c.academic_year}</small></div>
-            <span className={`pill warning`}>{c.description || t('noDescription')}</span>
-            <div className="actions">
-              <button className="secondary small" onClick={() => startEdit(c)}>{t('classEdit')}</button>
-              <button className="danger small" onClick={() => remove(c.id)}>{t('deleteClass')}</button>
-            </div>
-          </div>
-        ))}
-      </section>
-      {editingClass && (
-        <section className="panel">
-          <h3>{t('classEdit')}</h3>
-          <form onSubmit={(e) => update(e, editingClass.id)}>
-            <label>{t('className')}<input required value={editName} onChange={(e) => setEditName(e.target.value)} /></label>
-            <label>{t('academicYear')}<input value={editYear} onChange={(e) => setEditYear(e.target.value)} /></label>
-            <label>{t('description')}<textarea value={editDescription} onChange={(e) => setEditDescription(e.target.value)} /></label>
-            <button className="primary" disabled={busy}>{t('save')}</button>
-            <button type="button" className="secondary" onClick={() => setEditingClass(null)}>{t('cancel')}</button>
-          </form>
-        </section>
-      )}
-    </>
-  )
+  return <>
+    <Heading title={t('classes')} subtitle={canManage ? undefined : t('classesReadOnlyHint')} />
+    {canManage && <section className="panel"><h3>{t('addClass')}</h3><form onSubmit={create}>
+      <label>{t('className')}<input required value={name} onChange={e => setName(e.target.value)} /></label>
+      <label>{t('academicYear')}<input required value={academicYear} onChange={e => setAcademicYear(e.target.value)} /></label>
+      <label>{t('description')}<textarea value={description} onChange={e => setDescription(e.target.value)} /></label>
+      <button className="primary" disabled={busy}>{t('save')}</button>
+    </form></section>}
+    <section className="panel"><h3>{t('manageClasses')}</h3>
+      {loading ? <Empty t={t} /> : classes.length === 0 ? <p>{t('noClassesYet')}</p> : classes.map(c => {
+        const count = students.filter(s => s.class_id === c.id).length
+        return <div key={c.id} className="student-row">
+          <button className="secondary" onClick={() => setSelected(selected === c.id ? null : c.id)}>{selected === c.id ? t('hideStudents') : t('viewStudents')}</button>
+          <div className="grow"><b>{c.name}</b><small>{c.academic_year || '—'} · {count} {t('studentsCount')}</small></div>
+          {canManage && <div className="actions"><button className="secondary small" onClick={() => startEdit(c)}>{t('classEdit')}</button><button className="danger small" onClick={() => void remove(c.id)} disabled={busy}>{t('deleteClass')}</button></div>}
+        </div>
+      })}
+    </section>
+    {selectedClass && <section className="panel"><div className="panel-head"><h3>{selectedClass.name} — {t('students')}</h3><span className="pill success">{members.length}</span></div>
+      {members.length ? members.map(st => <div className="student-row" key={st.id}><div className="grow"><b>{st.full_name}</b><small>#{st.student_code}</small></div><span className={'pill ' + (st.is_active ? 'success' : 'warning')}>{st.is_active ? t('active') : t('inactive')}</span></div>) : <p className="muted">{t('noStudentsInClass')}</p>}
+    </section>}
+    <section className="panel"><h3>{t('unassignedStudents')}</h3>{unassigned.length ? unassigned.map(st => <div className="student-row" key={st.id}><div className="grow"><b>{st.full_name}</b><small>#{st.student_code}</small></div></div>) : <p className="muted">{t('none')}</p>}</section>
+    {editingClass && canManage && <section className="panel"><h3>{t('classEdit')}</h3><form onSubmit={e => void update(e, editingClass.id)}>
+      <label>{t('className')}<input required value={editName} onChange={e => setEditName(e.target.value)} /></label><label>{t('academicYear')}<input value={editYear} onChange={e => setEditYear(e.target.value)} /></label><label>{t('description')}<textarea value={editDescription} onChange={e => setEditDescription(e.target.value)} /></label>
+      <button className="primary" disabled={busy}>{t('save')}</button><button type="button" className="secondary" onClick={() => setEditingClass(null)}>{t('cancel')}</button>
+    </form></section>}
+  </>
 }
 
 function DailyStatus({ profile, t }: { profile: Profile; t: T }) {
@@ -4917,11 +4898,122 @@ function Modal({ title, close, children, closeLabel }: {
 }
 
 
+function ManagementReports({ profile, t }: { profile: Profile; t: T }) {
+  type Field = { key: string; label: string; required: boolean }
+  type Template = { id: string; name: string | null; file_name: string; file_path: string; version: number; form_fields: Field[]; instructions: string | null }
+  type Report = { id: string; template_name_snapshot: string; coach_name_snapshot: string; report_date: string; status: string; responses: Record<string,string>; form_fields_snapshot: Field[]; created_at: string }
+  const isCoach = profile.role === 'coach'
+  const [template, setTemplate] = useState<Template | null>(null)
+  const [reports, setReports] = useState<Report[]>([])
+  const [responses, setResponses] = useState<Record<string,string>>({})
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [formOpen, setFormOpen] = useState(false)
+  const [reportDate, setReportDate] = useState(localDate())
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+
+  async function load() {
+    setLoading(true)
+    if (!isConfigured || !profile.institution_id) { setLoading(false); return }
+    if (isCoach) {
+      const [templateRes, reportsRes] = await Promise.all([
+        supabase.from('report_templates').select('id,name,file_name,file_path,version,form_fields,instructions').eq('institution_id', profile.institution_id).eq('is_current', true).eq('is_archived', false).maybeSingle(),
+        supabase.from('template_reports').select('id,template_name_snapshot,coach_name_snapshot,report_date,status,responses,form_fields_snapshot,created_at').eq('coach_id', profile.id).order('created_at', { ascending: false }),
+      ])
+      if (templateRes.error) notify(templateRes.error.message)
+      if (reportsRes.error) notify(reportsRes.error.message)
+      setTemplate(templateRes.data as Template | null)
+      setReports((reportsRes.data ?? []) as Report[])
+    } else {
+      const { data, error } = await supabase.from('template_reports').select('id,template_name_snapshot,coach_name_snapshot,report_date,status,responses,form_fields_snapshot,created_at').eq('institution_id', profile.institution_id).order('created_at', { ascending: false })
+      if (error) notify(error.message)
+      setReports((data ?? []) as Report[])
+    }
+    setLoading(false)
+  }
+  useEffect(() => { void load() }, [profile.id, profile.institution_id, profile.role])
+
+  function openDraft(row?: Report) {
+    setEditingId(row?.id || null)
+    setFormOpen(true)
+    setResponses(row?.responses || {})
+    setReportDate(row?.report_date || localDate())
+  }
+  async function saveDraft() {
+    if (!template || !profile.institution_id || !isCoach) return
+    setBusy(true)
+    const payload = { institution_id: profile.institution_id, template_id: template.id, template_version: template.version,
+      template_name_snapshot: template.name || template.file_name, template_file_path_snapshot: template.file_path,
+      template_file_name_snapshot: template.file_name, form_fields_snapshot: template.form_fields || [], coach_id: profile.id,
+      coach_name_snapshot: profile.full_name, report_date: reportDate, responses, status: 'draft', is_finalized: false }
+    const result = editingId
+      ? await supabase.from('template_reports').update({ responses, report_date: reportDate }).eq('id', editingId).eq('status', 'draft').select('id')
+      : await supabase.from('template_reports').insert(payload).select('id')
+    setBusy(false)
+    if (result.error) { notify(result.error.message); return }
+    const savedId = (result.data as { id: string }[] | null)?.[0]?.id
+    if (!savedId) { notify(t('noPermission')); return }
+    setEditingId(savedId)
+    notify(t('draftSaved')); await load()
+  }
+  async function submitDraft() {
+    if (!template || !profile.institution_id) return
+    setBusy(true)
+    let reportId = editingId
+    if (reportId) {
+      const saved = await supabase.from('template_reports').update({ responses, report_date: reportDate }).eq('id', reportId).eq('status', 'draft').select('id')
+      if (saved.error || !affectedRows(saved.data)) { setBusy(false); notify(saved.error?.message || t('noPermission')); return }
+    } else {
+      const payload = { institution_id: profile.institution_id, template_id: template.id, template_version: template.version, template_name_snapshot: template.name || template.file_name, template_file_path_snapshot: template.file_path, template_file_name_snapshot: template.file_name, form_fields_snapshot: template.form_fields || [], coach_id: profile.id, coach_name_snapshot: profile.full_name, report_date: reportDate, responses, status: 'draft', is_finalized: false }
+      const created = await supabase.from('template_reports').insert(payload).select('id').single()
+      if (created.error || !created.data) { setBusy(false); notify(created.error?.message || t('noPermission')); return }
+      reportId = (created.data as { id: string }).id
+    }
+    const { error } = await supabase.rpc('submit_template_report', { p_report_id: reportId })
+    setBusy(false)
+    if (error) { notify(error.message); return }
+    notify(t('reportSubmitted')); setEditingId(null); setFormOpen(false); setResponses({}); await load()
+  }
+  async function review(row: Report) {
+    if (!window.confirm(t('reviewReportConfirm'))) return
+    setBusy(true)
+    const { data, error } = await supabase.from('template_reports').update({ status: 'reviewed', reviewed_by: profile.id }).eq('id', row.id).eq('status', 'submitted').select('id')
+    setBusy(false)
+    if (error) { notify(error.message); return }
+    if (!affectedRows(data)) { notify(t('noPermission')); return }
+    await load()
+  }
+  const currentFields = template?.form_fields || []
+  return <>
+    <Heading title={t('managementReports')} subtitle={isCoach ? t('managementReportsCoachHint') : t('managementReportsAdminHint')} />
+    {isCoach && <section className="panel">
+      <h3>{template ? (template.name || template.file_name) : t('noActiveManagementTemplate')}</h3>
+      {template?.instructions && <p className="muted">{template.instructions}</p>}
+      {!template ? <p className="muted">{t('noActiveManagementTemplate')}</p> : currentFields.length === 0 ? <p className="muted">{t('templateFieldsNotConfigured')}</p> : <>
+        <button className="primary" onClick={() => openDraft()}>{t('newManagementReport')}</button>
+        {formOpen && <div className="panel" style={{marginTop:14}}><form onSubmit={e => { e.preventDefault(); void saveDraft() }}>
+          <label>{t('date')}<input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)} /></label>
+          {currentFields.map(field => <label key={field.key}>{field.label}{field.required ? ' *' : ''}<textarea required={field.required} value={responses[field.key] || ''} onChange={e => setResponses(prev => ({ ...prev, [field.key]: e.target.value }))} /></label>)}
+          <div className="actions"><button type="button" className="secondary" disabled={busy} onClick={() => void saveDraft()}>{t('saveDraft')}</button><button type="button" className="primary" disabled={busy} onClick={() => void submitDraft()}>{t('submitFinalReport')}</button><button type="button" className="secondary" onClick={() => { setEditingId(null); setFormOpen(false); setResponses({}) }}>{t('cancel')}</button></div>
+        </form></div>}
+      </>}
+    </section>}
+    <section className="panel"><h3>{isCoach ? t('myManagementReports') : t('managementReportsInbox')}</h3>
+      {loading ? <Empty t={t} /> : reports.length === 0 ? <p className="muted">{t('noManagementReports')}</p> : reports.map(row => <article className="student-row" key={row.id}>
+        <div className="grow"><b>{row.template_name_snapshot}</b><small>{row.coach_name_snapshot} · {row.report_date}</small><small>{row.form_fields_snapshot.map(f => `${f.label}: ${row.responses?.[f.key] || '—'}`).join(' | ')}</small></div>
+        <span className={'pill ' + (row.status === 'reviewed' ? 'success' : 'warning')}>{t(row.status)}</span>
+        {isCoach && row.status === 'draft' && <button className="secondary small" onClick={() => openDraft(row)}>{t('continueDraft')}</button>}
+        {!isCoach && row.status === 'submitted' && <button className="primary small" disabled={busy} onClick={() => void review(row)}>{t('markReviewed')}</button>}
+      </article>)}
+    </section>
+  </>
+}
+
 function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
   const [items, setItems] = useState<{
     id: string; institution_id: string; name: string | null; file_name: string;
     file_path: string; version: number; is_current: boolean; is_archived: boolean;
-    description: string | null; instructions: string | null; created_at: string;
+    description: string | null; instructions: string | null; form_fields: { key: string; label: string; required: boolean }[]; created_at: string;
   }[]>([])
   const [loading, setLoading] = useState(true)
   const [show, setShow] = useState(false)
@@ -4929,6 +5021,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [instructions, setInstructions] = useState('')
+  const [fieldLines, setFieldLines] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
 
@@ -4937,7 +5030,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
     if (!isConfigured || !profile.institution_id) { setLoading(false); return }
     const { data, error } = await supabase
       .from('report_templates')
-      .select('id,institution_id,name,file_name,file_path,version,is_current,is_archived,description,instructions,created_at')
+      .select('id,institution_id,name,file_name,file_path,version,is_current,is_archived,description,instructions,form_fields,created_at')
       .eq('institution_id', profile.institution_id)
       .order('created_at', { ascending: false })
     if (error) notify(error.message)
@@ -4947,7 +5040,8 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
 
   useEffect(() => { void load() }, [profile.institution_id])
 
-  function reset() { setName(''); setDescription(''); setInstructions(''); setFile(null); setEditing(null) }
+  function reset() { setName(''); setDescription(''); setInstructions(''); setFieldLines(''); setFile(null); setEditing(null) }
+  function parseFieldLines() { return fieldLines.split('\n').map((line) => line.trim()).filter(Boolean).map((line, index) => { const [label, requiredFlag] = line.split('|'); return { key: `field_${index + 1}`, label: label.trim(), required: (requiredFlag || '').trim().toLowerCase() === 'required' } }).filter(field => field.label) }
 
   async function save(e: FormEvent) {
     e.preventDefault()
@@ -4969,7 +5063,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
     if (editing) {
       const { data, error } = await supabase.from('report_templates').update({
         name: name.trim(), description: description.trim() || null,
-        instructions: instructions.trim() || null,
+        instructions: instructions.trim() || null, form_fields: parseFieldLines(),
       }).eq('id', editing).eq('institution_id', profile.institution_id).select('id')
       setBusy(false)
       if (error) { notify(error.message); return }
@@ -4988,6 +5082,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
         is_current: false,
         description: description.trim() || null,
         instructions: instructions.trim() || null,
+        form_fields: parseFieldLines(),
         is_archived: false,
       }).select('id').single()
       if (error) { setBusy(false); notify(error.message); return }
@@ -5047,6 +5142,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
     setName(row.name || row.file_name)
     setDescription(row.description || '')
     setInstructions(row.instructions || '')
+    setFieldLines((row.form_fields || []).map(f => `${f.label}${f.required ? '|required' : ''}`).join('\n'))
     setFile(null)
     setShow(true)
   }
@@ -5129,6 +5225,9 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
             </label>
             <label>{t('templateInstructions')}
               <textarea rows={3} value={instructions} onChange={e => setInstructions(e.target.value)} />
+            </label>
+            <label>{t('managementReportFields')}
+              <textarea rows={6} value={fieldLines} onChange={e => setFieldLines(e.target.value)} placeholder={t('managementReportFieldsHint')} />
             </label>
             <div className="notice-box">
               <b>{t('templatePlaceholders')}</b>

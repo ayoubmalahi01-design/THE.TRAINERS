@@ -18,6 +18,7 @@ const required = [
   'tests/student-import.test.ts',
   'supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql',
   'supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql',
+  'supabase/migrations/20261119132835_coach_management_report_forms.sql',
   'src/lib/report-template.ts',
   'src/lib/report-template-render.ts',
   'tests/otp-security.test.ts',
@@ -61,6 +62,8 @@ const app = read('src/App.tsx')
 const studentImport = read('src/lib/student-import.ts')
 const statusMigration = read('supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql')
 const privateRpcMigration = read('supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql')
+const managementReportMigration = read('supabase/migrations/20261119132835_coach_management_report_forms.sql')
+const styles = read('src/styles.css')
 const envExample = read('.env.example')
 const config = read('supabase/config.toml')
 const invite = read('supabase/functions/invite-user/index.ts')
@@ -233,6 +236,12 @@ const checks = [
   ['Excel import uses read-excel-file', /read-excel-file\/browser/.test(app)],
   ['unknown routes render a not-found screen', /path="\*" element=\{<NotFound/.test(app)],
   ['Word export uses the uploaded template with a fallback', /renderReportTemplate/.test(app) && /buildReportDocument/.test(app)],
+  ['coach can open institution classes in read-only mode', /path="\/classes" element=\{!owner \? <ClassManagement/.test(app) && /const canManage = profile.role === 'manager' \|\| profile.role === 'admin'/.test(app) && /from\('students'\).*class_id/.test(app)],
+  ['mobile sidebar has a contained vertical scroll region', /\.sidebar nav\{flex:1 1 auto;min-height:0;overflow-y:auto/.test(styles)],
+  ['management report form is separate from daily reports', /path="\/management-reports"/.test(app) && /from\('template_reports'\)/.test(app) && /from\('daily_reports'\)/.test(app)],
+  ['admin can configure fillable template fields', /form_fields: parseFieldLines\(\)/.test(app) && /managementReportFields/.test(app)],
+  ['management reports use immutable final submission RPC', /submit_template_report/.test(app) && /CREATE OR REPLACE FUNCTION public.submit_template_report/.test(managementReportMigration) && /Submitted management report is immutable/.test(managementReportMigration)],
+  ['management report migration preserves institution and role isolation', /current_institution_id\(\)/.test(managementReportMigration) && /is_platform_owner\(\)/.test(managementReportMigration) && /coach_id = auth\.uid\(\)/.test(managementReportMigration)],
   ['absence queue uses persisted trigger-generated follow-ups', /absence_followups/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && /mark_followup_handled/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && !/computeAbsenceFollowUps/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings'))],
   ['read receipts are per message and reader', /message_reads\(message_id, reader_id, read_at\)/i.test(sql) && /primary key \(message_id, reader_id\)/i.test(sql) && /on conflict \(message_id, reader_id\)/i.test(sql)],
   ['institution deletion is not called from the browser', !/rpc\('delete_institution'/.test(app) && /institutionDeleteUnavailable/.test(app)],
