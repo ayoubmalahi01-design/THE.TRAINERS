@@ -1,0 +1,23 @@
+-- THE TRAINERS
+-- Tighten institution storage object policies
+-- Applied to Supabase: 20261116192646
+-- Status: APPLIED IN PRODUCTION (do not re-run)
+
+-- Production changes (documented, not re-executable here):
+-- 1. Dropped the permissive trainer_storage_member_rw policy (ALL command on
+--    storage.objects for trainer-avatars and trainer-media).
+-- 2. Added trainer_avatars_delete: DELETE on storage.objects, USING (
+--      bucket_id = 'trainer-avatars'
+--      and (storage.foldername(name))[2] = auth.uid()::text
+--    ) -- only the file owner may delete their avatar.
+-- 3. Added trainer_media_update: UPDATE on storage.objects, WITH CHECK (
+--      bucket_id = 'trainer-media'
+--      and (storage.foldername(name))[1] = public.current_institution_id()::text
+--      and (storage.foldername(name))[3] = auth.uid()::text
+--      and exists (select 1 from public.conversation_members cm
+--                  where cm.profile_id = auth.uid()
+--                    and cm.conversation_id::text = (storage.foldername(name))[2])
+--    ) -- only the file owner within the conversation may update.
+-- 4. Retained existing upload/read/delete policies for conversation media and
+--    member avatars.
+-- 5. No changes to trainer-medical or trainer-report-templates buckets.

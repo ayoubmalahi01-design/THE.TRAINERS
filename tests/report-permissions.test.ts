@@ -18,10 +18,11 @@ const submitted = { coach_id: 'coach-1', status: 'submitted', is_finalized: true
 const reviewed = { coach_id: 'coach-1', status: 'reviewed', is_finalized: true }
 const draft = { coach_id: 'coach-1', status: 'draft', is_finalized: false }
 
-test('a coach can never delete a report, even their own', () => {
+test('a coach may delete only their own unsent draft', () => {
+  assert.equal(canDeleteReport(coach, draft), true)
   assert.equal(canDeleteReport(coach, submitted), false)
   assert.equal(canDeleteReport(coach, reviewed), false)
-  assert.equal(canDeleteReport(coach, draft), false)
+  assert.equal(canDeleteReport(otherCoach, draft), false)
 })
 
 test('the platform owner has no institution report scope', () => {
@@ -44,10 +45,9 @@ test('a coach cannot delete another coach report either', () => {
   assert.equal(canDeleteReport(otherCoach, reviewed), false)
 })
 
-test('drafts are never deletable from the reports screen', () => {
-  for (const actor of [manager, admin]) {
-    assert.equal(canDeleteReport(actor, draft), false)
-  }
+test('only the owning coach may delete a draft; administration cannot delete drafts', () => {
+  assert.equal(canDeleteReport(manager, draft), false)
+  assert.equal(canDeleteReport(admin, draft), false)
 })
 
 test('review is limited to managers/admins and submitted reports', () => {
@@ -67,7 +67,7 @@ test('an update that affected no row is not a success', () => {
 })
 
 test('delete failures carry a reason, not a false success', () => {
-  assert.equal(describeDeleteFailure('coach'), 'coach_cannot_delete')
+  assert.equal(describeDeleteFailure('coach'), 'coach_may_delete_own_draft_only')
   assert.equal(describeDeleteFailure('owner'), 'owner_out_of_scope')
   assert.equal(describeDeleteFailure('manager'), 'not_allowed_or_report_missing')
 })

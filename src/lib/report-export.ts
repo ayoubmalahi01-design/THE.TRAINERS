@@ -37,6 +37,9 @@ export type ReportExportInput = {
   reportingPeriodEnd?: string | null
   issueDate?: string | null
   submittedAt?: string | null
+  reviewedAt?: string | null
+  reviewedBy?: string | null
+  students?: { name: string; status: string; observation: string; incident: string; injuryDetails: string; notes: string }[]
 }
 
 function formatCountLabel(key: string): string {
@@ -132,6 +135,24 @@ export async function buildReportDocument(input: ReportExportInput): Promise<Blo
               }),
             ],
           }),
+          ...(input.students?.length ? [
+            new Paragraph({ children: [new TextRun({ text: '' })] }),
+            new Paragraph({
+              heading: HeadingLevel.HEADING_2,
+              bidirectional: true,
+              alignment: AlignmentType.RIGHT,
+              children: [new TextRun({ text: 'تفاصيل التلاميذ / Student details', bold: true, size: 24 })],
+            }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                new TableRow({ children: ['التلميذ / Student', 'الحالة / Status', 'ملاحظة / Observation', 'حادثة / Incident', 'إصابة / Injury', 'تفاصيل / Notes'].map((label) => new TableCell({ children: [new Paragraph({ bidirectional: true, alignment: AlignmentType.RIGHT, children: [new TextRun({ text: label, bold: true })] })] })) }),
+                ...input.students.map((student) => new TableRow({
+                  children: [student.name, student.status, student.observation, student.incident, student.injuryDetails, student.notes].map((value) => new TableCell({ children: [new Paragraph({ bidirectional: true, alignment: AlignmentType.RIGHT, children: [new TextRun({ text: value || '—' })] })] })),
+                })),
+              ],
+            }),
+          ] : []),
           new Paragraph({ children: [new TextRun({ text: '' })] }),
           new Paragraph({
             bidirectional: true,
@@ -158,6 +179,16 @@ export async function buildReportDocument(input: ReportExportInput): Promise<Blo
             bidirectional: true,
             alignment: AlignmentType.RIGHT,
             children: [new TextRun({ text: `تاريخ الإرسال / Submitted at: ${input.submittedAt ? new Date(input.submittedAt).toLocaleString('ar') : '—'}`, size: 20 })],
+          }),
+          new Paragraph({
+            bidirectional: true,
+            alignment: AlignmentType.RIGHT,
+            children: [new TextRun({ text: `وقت المراجعة / Reviewed at: ${input.reviewedAt ? new Date(input.reviewedAt).toLocaleString('ar') : '—'}`, size: 20 })],
+          }),
+          new Paragraph({
+            bidirectional: true,
+            alignment: AlignmentType.RIGHT,
+            children: [new TextRun({ text: `راجع التقرير / Reviewed by: ${input.reviewedBy || '—'}`, size: 20 })],
           }),
         ],
       },

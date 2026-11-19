@@ -1,7 +1,7 @@
 // Report lifecycle permissions (pure, no Supabase import).
 //
 // Business rules enforced by the interface and mirrored in the database:
-//   * the coach who submitted a report can never delete it;
+//   * a coach may delete only their own unsent draft; submitted reports are immutable for coaches;
 //   * institution administrators (admin) may delete reviewed reports only;
 //   * the institution director (manager) may delete finalized/historical reports;
 //   * the platform owner has no institution scope and never deletes reports.
@@ -20,9 +20,11 @@ export type ReportTarget = {
   is_finalized: boolean
 }
 
-/** True when the actor is allowed to delete the given report. */
+/** A coach may discard only their own unsent draft. Final-report rules remain unchanged. */
 export function canDeleteReport(actor: ReportActor, target: ReportTarget): boolean {
-  if (!target.is_finalized) return false
+  if (!target.is_finalized) {
+    return target.status === 'draft' && actor.role === 'coach' && target.coach_id === actor.id
+  }
   if (target.coach_id === actor.id) return false
   if (actor.role === 'manager') return true
   if (actor.role === 'admin') return target.status === 'reviewed'
@@ -47,7 +49,7 @@ export function affectedRows<T>(rows: T[] | null | undefined): number {
 
 /** Human-readable reason used when a delete silently affected no rows. */
 export function describeDeleteFailure(actorRole: string): string {
-  if (actorRole === 'coach') return 'coach_cannot_delete'
+  if (actorRole === 'coach') return 'coach_may_delete_own_draft_only'
   if (actorRole === 'owner') return 'owner_out_of_scope'
   return 'not_allowed_or_report_missing'
 }

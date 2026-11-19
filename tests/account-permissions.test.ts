@@ -22,7 +22,7 @@ const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
 
 const setup = read('supabase/THE_TRAINERS_SETUP.sql')
 const invitations = read('supabase/INVITATIONS_OTP_INCREMENTAL.sql')
-const repair = read('supabase/migrations/0003_account_management_repair.sql')
+const repair = read('supabase/manual-applied/legacy/0003_account_management_repair.sql')
 const app = read('src/App.tsx')
 const inviteFunction = read('supabase/functions/invite-user/index.ts')
 
@@ -127,10 +127,10 @@ test('the privilege guard blocks self-promotion and Administration review', () =
   assert.doesNotMatch(guard, /actor_role not in \('manager','admin'\)/)
 })
 
-test('the platform owner sees every audit row', () => {
+test('the platform owner sees institution audit events only', () => {
   const policy = block(setup, 'create policy audit_read_admin', ');')
   assert.match(policy, /is_platform_owner\(\)/)
-  assert.doesNotMatch(policy, /table_name='institutions'/)
+  assert.match(policy, /table_name\s*=\s*'institutions'/)
 })
 
 test('the repair migration is additive, transactional and non-destructive', () => {

@@ -19,11 +19,10 @@
 //
 // Deploy with: supabase functions deploy invite-user
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.0'
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
 import {
   HttpError,
-  appBaseUrl,
   bearer,
   fail,
   isEmail,
@@ -77,6 +76,7 @@ serve(async (req) => {
     const url = requireEnv('SUPABASE_URL')
     const anon = requireEnv('SUPABASE_ANON_KEY')
     const service = requireEnv('SUPABASE_SERVICE_ROLE_KEY')
+    const appUrl = requireEnv('APP_URL').replace(/\/+$/, '')
 
     const token = bearer(req)
     if (!token) throw new HttpError(401, 'unauthorized')
@@ -233,7 +233,7 @@ serve(async (req) => {
     if (!existing) {
       const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
         data: { full_name: fullName, role, institution_id: institutionId },
-        redirectTo: `${appBaseUrl()}/`,
+        redirectTo: `${appUrl}/`,
       })
       if (inviteError) {
         const status = Number((inviteError as { status?: number }).status ?? 0)

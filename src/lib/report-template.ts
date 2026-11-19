@@ -19,7 +19,10 @@ export type TemplateCounts = {
 
 export type TemplateStudent = {
   name: string
+  status: string
   observation: string
+  incident: string
+  injuryDetails: string
   notes: string
 }
 
@@ -33,6 +36,8 @@ export type TemplateReportInput = {
   reportingPeriodEnd?: string | null
   issueDate?: string | null
   submittedAt?: string | null
+  reviewedAt?: string | null
+  reviewedBy?: string | null
   students?: TemplateStudent[]
 }
 
@@ -51,6 +56,8 @@ export type TemplateValues = {
   period_end: string
   issue_date: string
   submitted_at: string
+  reviewed_at: string
+  reviewed_by: string
   students: TemplateStudent[]
 }
 
@@ -82,9 +89,14 @@ export function templateValues(input: TemplateReportInput): TemplateValues {
     period_end: text(input.reportingPeriodEnd),
     issue_date: text(input.issueDate),
     submitted_at: text(input.submittedAt),
+    reviewed_at: text(input.reviewedAt),
+    reviewed_by: text(input.reviewedBy),
     students: (input.students ?? []).map((student) => ({
       name: text(student.name),
+      status: text(student.status),
       observation: text(student.observation, ''),
+      incident: text(student.incident, ''),
+      injuryDetails: text(student.injuryDetails, ''),
       notes: text(student.notes, ''),
     })),
   }

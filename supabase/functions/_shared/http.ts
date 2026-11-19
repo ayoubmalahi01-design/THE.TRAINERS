@@ -30,7 +30,10 @@ export function allowedOrigins(): string[] {
     .filter(Boolean)
   const app = (Deno.env.get('APP_URL') ?? '').trim().replace(/\/+$/, '')
   const list = [...configured, ...(app ? [app] : [])]
-  return list.length ? Array.from(new Set(list)) : DEFAULT_ORIGINS
+  if (list.length) return Array.from(new Set(list))
+  // In deployed Supabase Functions never reflect localhost by default.
+  // Local development retains the localhost origins when no Supabase runtime exists.
+  return Deno.env.get('SUPABASE_URL') ? [] : DEFAULT_ORIGINS
 }
 
 export function corsHeaders(req: Request, browser = true): Record<string, string> {
@@ -152,12 +155,6 @@ export function isUuid(value: unknown): boolean {
     && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
-export function appBaseUrl(): string {
-  const configured = (Deno.env.get('APP_URL') ?? '').trim().replace(/\/+$/, '')
-  if (configured) return configured
-  const first = allowedOrigins()[0] ?? ''
-  return first.replace(/\/+$/, '')
-}
 
 export function logServerError(scope: string, error: unknown): void {
   if (error instanceof HttpError) {

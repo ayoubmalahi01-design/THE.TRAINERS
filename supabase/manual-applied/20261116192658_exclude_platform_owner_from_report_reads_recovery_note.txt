@@ -1,0 +1,15 @@
+-- THE TRAINERS
+-- Exclude platform owner from report reads
+-- Applied to Supabase: 20261116192658
+-- Status: APPLIED IN PRODUCTION (do not re-run)
+
+-- Production changes (documented, not re-executable here):
+-- 1. Modified daily_reports SELECT policy to exclude platform owner from
+--    reading coach reports (is_platform_owner() removed from USING clause).
+-- 2. Modified report_details SELECT policy to exclude platform owner from
+--    reading report details.
+-- 3. Retained coach reads own reports only.
+-- 4. Retained admin reads finalized reports only.
+-- 5. Retained manager reads finalized reports of institution.
+-- 6. No changes to INSERT/UPDATE/DELETE policies.
+'@

@@ -18,7 +18,9 @@ const input: TemplateReportInput = {
   reportingPeriodEnd: '2026-11-15',
   issueDate: '2026-11-16',
   submittedAt: '2026-11-16T10:00:00Z',
-  students: [{ name: 'سارة', observation: 'تحسن', notes: 'متابعة' }],
+  reviewedAt: '2026-11-16T11:00:00Z',
+  reviewedBy: 'المدير',
+  students: [{ name: 'سارة', status: 'present', observation: 'تحسن', incident: '—', injuryDetails: '', notes: 'متابعة' }],
 }
 
 test('counts and total are mapped as plain text', () => {
@@ -38,6 +40,8 @@ test('report metadata keeps the independent chronology fields', () => {
   assert.equal(values.period_end, '2026-11-15')
   assert.equal(values.issue_date, '2026-11-16')
   assert.equal(values.submitted_at, '2026-11-16T10:00:00Z')
+  assert.equal(values.reviewed_at, '2026-11-16T11:00:00Z')
+  assert.equal(values.reviewed_by, 'المدير')
   assert.equal(values.institution, 'مؤسسة النجاح')
 })
 
@@ -56,8 +60,8 @@ test('missing optional values fall back to an em dash instead of "null"', () => 
 })
 
 test('student rows are trimmed and empty observation stays empty, not a dash', () => {
-  const values = templateValues({ ...input, students: [{ name: ' سارة ', observation: '', notes: '' }] })
-  assert.deepEqual(values.students, [{ name: 'سارة', observation: '', notes: '' }])
+  const values = templateValues({ ...input, students: [{ name: ' سارة ', status: ' present ', observation: '', incident: '', injuryDetails: '', notes: '' }] })
+  assert.deepEqual(values.students, [{ name: 'سارة', status: 'present', observation: '', incident: '', injuryDetails: '', notes: '' }])
 })
 
 test('the placeholder list documents the supported tokens', () => {

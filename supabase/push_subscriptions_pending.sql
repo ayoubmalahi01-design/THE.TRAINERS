@@ -1,7 +1,7 @@
--- THE TRAINERS – Push Subscriptions (source-only, pending approval)
--- This file defines the schema for Web Push subscriptions.
--- It is NOT executed in production. Requires approval before deployment.
--- VAPID keys must be generated and stored as Supabase secrets.
+-- THE TRAINERS – Legacy Push Subscription Schema Reference
+-- The table is now included in THE_TRAINERS_SETUP.sql and already exists in production.
+-- Do NOT run this file separately. It stores browser subscriptions only; a VAPID sender
+-- is not implemented/deployed, so it does not provide push delivery after app closure.
 
 -- Push subscriptions table: one row per device/browser.
 create table if not exists public.push_subscriptions (

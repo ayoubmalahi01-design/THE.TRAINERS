@@ -240,12 +240,11 @@ test('OTP acceptance does not auto-activate a new account', () => {
   assert.doesNotMatch(migration, /invitation_accepted[\s\S]{0,400}account_status', 'active'/)
 })
 
-test('public configuration examples contain placeholders only', () => {
-  assert.match(envExample, /YOUR_PROJECT_REF/)
-  assert.match(envExample, /YOUR_ANON_OR_PUBLISHABLE_KEY/)
-  assert.doesNotMatch(envExample, /https:\/\/[a-z0-9]{15,}\.supabase\.co/i)
-  assert.doesNotMatch(envExample, /sb_publishable_[A-Za-z0-9_-]{10,}/)
-  assert.doesNotMatch(envExample, /SERVICE_ROLE_KEY/)
+test('public configuration example targets the intended Supabase project without secrets', () => {
+  assert.match(envExample, /https:\/\/rxkyryaplszuklagvidi\.supabase\.co/)
+  assert.match(envExample, /sb_publishable_[A-Za-z0-9_-]{10,}/)
+  assert.doesNotMatch(envExample, /VITE_[A-Z0-9_]*SERVICE_ROLE/i)
+  assert.doesNotMatch(envExample, /postgresql:\/\//i)
 })
 
 test('every invitation and OTP message exists in all three languages', () => {

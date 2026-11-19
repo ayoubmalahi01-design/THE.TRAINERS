@@ -11,6 +11,7 @@ import type { Session } from '@supabase/supabase-js'
 import { supabase, isConfigured } from './lib/supabase'
 import { makeT, isRtl, setDateLocale, formatDateTime, formatTime, type Lang } from './lib/i18n'
 import { notify, setToastListener } from './lib/toast'
+import { parseStudentImportText } from './lib/student-import'
 import {
   loadAttendance, saveAttendance, buildAttendanceRows, NO_SESSION,
 } from './lib/attendance'
@@ -35,7 +36,6 @@ import {
   buildReportDetailRows, detailsInsertedCompletely, reportAcceptsDetails, upsertDetailDraft,
   type DetailDraft,
 } from './lib/report-details'
-import { computeAbsenceFollowUps, withStoredState } from './lib/absence'
 import {
   TEMPLATE_PLACEHOLDERS, templateExportFileName, type TemplateReportInput,
 } from './lib/report-template'
@@ -114,6 +114,7 @@ type ChatMessage = {
   created_at: string
   message_type: string
   media_path: string | null
+  readBy?: { id: string; full_name: string; read_at: string }[]
   profiles?: { full_name?: string | null } | null
   media_url?: string
 }
@@ -170,6 +171,16 @@ type AuditRow = {
   profiles?: { full_name?: string | null } | null
 }
 
+// institution_id, coach_id and shift_id identify a report and are immutable in the
+// database (guard_daily_report_relation). They are sent only on INSERT; sending the
+// current shift on every update made editing an older draft fail with
+// "Report identity is immutable".
+function withoutReportIdentity<T extends Record<string, unknown>>(row: T) {
+  const { shift_id, coach_id, institution_id, ...rest } = row
+  void shift_id; void coach_id; void institution_id
+  return rest
+}
+
 function localDate() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -211,43 +222,6 @@ function defaultLocalProfile(): Profile {
   }
 }
 
-function parseStudentPaste(raw: string): { student_code: string; full_name: string }[] {
-  const lines = raw.replace(/\r/g, '').split('\n').map((x) => x.trim()).filter(Boolean)
-  if (!lines.length) return []
-  const delimiter = lines[0].includes('\t') ? '\t' : (lines[0].includes(';') ? ';' : ',')
-  const parse = (line: string) => {
-    const out: string[] = []
-    let value = ''
-    let quoted = false
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i]
-      if (c === '"') {
-        if (quoted && line[i + 1] === '"') { value += '"'; i++ } else quoted = !quoted
-      } else if (c === delimiter && !quoted) {
-        out.push(value.trim()); value = ''
-      } else value += c
-    }
-    out.push(value.trim())
-    return out
-  }
-  const rows = lines.map(parse)
-  const first = rows[0].map((x) => x.toLowerCase())
-  const codeNames = ['code', 'student_code', 'الرقم', 'رمز']
-  const nameNames = ['name', 'full_name', 'الاسم', 'اسم التلميذ', 'الاسم الكامل']
-  const hasHeader = first.some((x) => codeNames.includes(x) || nameNames.includes(x))
-  const data = hasHeader ? rows.slice(1) : rows
-  const header = hasHeader ? first : []
-  return data.map((cols) => {
-    let codeIndex = hasHeader ? header.findIndex((x) => codeNames.includes(x)) : 0
-    let nameIndex = hasHeader ? header.findIndex((x) => nameNames.includes(x)) : 1
-    if (codeIndex < 0) codeIndex = 0
-    if (nameIndex < 0) nameIndex = 1
-    return {
-      student_code: (cols[codeIndex] || '').trim(),
-      full_name: (cols[nameIndex] || '').trim(),
-    }
-  }).filter((x) => x.student_code && x.full_name)
-}
 
 const roleLabel = (role: string, t: T) => t(role)
 const emptyCounts = (): ReportCounts => ({
@@ -262,6 +236,9 @@ export default function App() {
   })
   const [session, setSession] = useState<Session | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
+  // Latest loaded profile, readable inside the long-lived auth listener.
+  const profileRef = useRef<Profile | null>(null)
+  profileRef.current = profile
   const [profileError, setProfileError] = useState('')
   const [localProfile, setLocalProfile] = useState<Profile>(defaultLocalProfile)
   const [passwordSetup, setPasswordSetup] = useState<'recovery' | 'invite' | null>(null)
@@ -386,6 +363,13 @@ export default function App() {
       if (event === 'PASSWORD_RECOVERY') setPasswordSetup('recovery')
       setSession(next)
       if (next) {
+        // Returning from the file picker / another app makes Supabase re-emit
+        // SIGNED_IN or TOKEN_REFRESHED for the SAME user. Re-syncing would show the
+        // loading screen and wipe every open form, so it is skipped.
+        if (
+          (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') &&
+          profileRef.current?.id === next.user.id
+        ) return
         setBusy(true)
         void sync(next.user.id)
       } else {
@@ -444,6 +428,7 @@ export default function App() {
       nav('/')
       return
     }
+    if (profile?.id) clearReportDraft(profile.id)
     await supabase.auth.signOut()
     setSession(null)
     setProfile(null)
@@ -574,6 +559,7 @@ export default function App() {
         ['/classes', GraduationCap, 'classes'],
         ['/attendance', CalendarDays, 'attendance'],
         ['/followups', Activity, 'absenceFollowups'],
+        ['/daily-status', CalendarDays, 'dailyStatus'],
         ['/reports', ClipboardList, 'reports'],
         ...(viewProfile.role === 'coach' ? [['/notebook', NotebookPen, 'notebook'] as [string, LucideIcon, string]] : []),
         ['/notices', Bell, 'notices'],
@@ -603,6 +589,7 @@ export default function App() {
           ['/', Home, 'home'],
           ['/students', Users, 'students'],
           ['/attendance', CalendarDays, 'attendance'],
+          ['/daily-status', Activity, 'dailyStatus'],
           ['/reports', ClipboardList, 'reports'],
           ['/messages', MessageCircle, 'messages'],
         ]
@@ -685,7 +672,8 @@ export default function App() {
             <Route path="/students" element={!owner ? <Students profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/classes" element={admin && !owner ? <ClassManagement profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/attendance" element={!owner ? <Attendance profile={viewProfile} t={t} /> : <Denied t={t} />} />
-            <Route path="/followups" element={admin && !owner ? <FollowUpQueue profile={viewProfile} t={t} /> : <Denied t={t} />} />
+            <Route path="/followups" element={!owner ? <FollowUpQueue profile={viewProfile} t={t} /> : <Denied t={t} />} />
+            <Route path="/daily-status" element={!owner ? <DailyStatus profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/reports" element={!owner ? <Reports profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notebook" element={viewProfile.role === 'coach' ? <Notebook profile={viewProfile} t={t} /> : <Denied t={t} />} />
             <Route path="/notices" element={!owner ? <Notices profile={viewProfile} t={t} /> : <Denied t={t} />} />
@@ -1275,11 +1263,13 @@ function Dashboard({ profile, t }: { profile: Profile; t: T }) {
       ? [
           ['/students', Users, 'students'],
           ['/attendance', CalendarDays, 'attendance'],
+          ['/daily-status', Activity, 'dailyStatus'],
           ['/reports', ClipboardList, 'reports'],
           ['/messages', MessageCircle, 'messages'],
         ]
       : [
           ['/students', Users, 'students'],
+          ['/daily-status', Activity, 'dailyStatus'],
           ['/reports', ClipboardList, 'reports'],
           ['/team', UserPlus, 'team'],
           ['/notices', Bell, 'notices'],
@@ -1468,7 +1458,7 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
     [items, search],
   )
   const existingCodes = useMemo(() => new Set(items.map((s) => s.student_code.toLowerCase())), [items])
-  const parsed = useMemo(() => parseStudentPaste(bulkText), [bulkText])
+  const parsed = useMemo(() => parseStudentImportText(bulkText), [bulkText])
   const importPlan = useMemo(() => {
     const seen = new Set<string>()
     const valid: { student_code: string; full_name: string }[] = []
@@ -1516,8 +1506,10 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
 
   async function toggleActive(student: Student) {
     if (!canManage) { notify(t('noPermission')); return }
-    const { error } = await supabase.from('students').update({ is_active: !student.is_active }).eq('id', student.id)
+    if (!window.confirm(t(student.is_active ? 'confirmDeactivateStudent' : 'confirmActivateStudent'))) return
+    const { data, error } = await supabase.from('students').update({ is_active: !student.is_active }).eq('id', student.id).select('id')
     if (error) { notify(error.message); return }
+    if (!affectedRows(data)) { notify(t('noPermission')); return }
     await load()
   }
 
@@ -1644,7 +1636,7 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
                   <button className="icon-btn row-action" title={t('edit')} onClick={() => openEdit(student)}>
                     <Pencil size={16} />
                   </button>
-                  <button className="icon-btn row-action" title={t('archive')} onClick={() => toggleActive(student)}>
+                  <button className="icon-btn row-action" title={student.is_active ? t('archive') : t('activate')} onClick={() => toggleActive(student)}>
                     <Archive size={16} />
                   </button>
                 </>
@@ -1681,18 +1673,28 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
           <p className="muted">{t('importHint')}</p>
           <label>{t('importExcel')}
             <input type="file" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              onChange={(e) => { void readImportFile(e.target.files?.[0] ?? null) }} />
+              onChange={(e) => { void readImportFile(e.target.files?.[0] ?? null); e.target.value = '' }} />
           </label>
           <label>{t('importPreview')}
-            <textarea rows={7} value={bulkText} onChange={(e) => setBulkText(e.target.value)}
+            <textarea rows={4} value={bulkText} onChange={(e) => setBulkText(e.target.value)}
               placeholder={'student_code,full_name\n001,محمد علي\n002,سارة أحمد'} />
           </label>
+          <p className="muted">{t('importCodeTextHint')}</p>
           <div className="bulk-preview">
-            <div><b>{t('previewValid')}: {importPlan.valid.length}</b></div>
-            <div>{t('importDup')}: {importPlan.duplicates}</div>
-            {importPlan.valid.slice(0, 8).map((row, index) => (
-              <div key={`${row.student_code}-${index}`}>{row.student_code} — {row.full_name}</div>
-            ))}
+            <div className="import-preview-summary">
+              <b>{t('previewValid')}: {importPlan.valid.length}</b>
+              <span>{t('importDup')}: {importPlan.duplicates}</span>
+            </div>
+            {importPlan.valid.length > 0 && (
+              <div className="table-wrap import-preview-table">
+                <table>
+                  <thead><tr><th>{t('code')}</th><th>{t('name')}</th></tr></thead>
+                  <tbody>{importPlan.valid.map((row, index) => (
+                    <tr key={`${row.student_code}-${index}`}><td>{row.student_code}</td><td>{row.full_name}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )}
             {importPlan.valid.length === 0 && parsed.length > 0 && (
               <div className="muted">{importPlan.duplicates ? t('allCodesExist') : t('noValidRows')}</div>
             )}
@@ -2000,6 +2002,8 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
       .delete()
       .eq('id', row.id)
       .eq('coach_id', row.coach_id)
+      .eq('is_finalized', row.is_finalized)
+      .eq('status', row.status)
       .select('id')
     if (error) { notify(error.message); return }
     if (!affectedRows(data)) {
@@ -2036,6 +2040,40 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
       notify(t('draftRestored'))
     }
     setShow(true)
+  }
+
+  // "Cancel" must really discard an unsent draft: the local snapshot AND the draft
+  // row saved in the database (a coach may delete only his own unsent drafts).
+  async function cancelReport() {
+    const hasContent = Boolean(draftId) || notes.trim().length > 0 || Object.values(counts as Record<string, number>).some((n) => n > 0)
+    if (!hasContent || !window.confirm(t('discardDraftConfirm'))) { setShow(false); return }
+    setBusy(true)
+    if (draftId) {
+      const removed = await supabase
+        .from('daily_reports')
+        .delete()
+        .eq('id', draftId)
+        .eq('coach_id', profile.id)
+        .eq('is_finalized', false)
+        .eq('status', 'draft')
+        .select('id')
+      if (removed.error) { setBusy(false); notify(removed.error.message); return }
+      if (!affectedRows(removed.data)) {
+        setBusy(false)
+        notify(t('reportDeleteFailed'))
+        await load()
+        return
+      }
+    }
+    clearReportDraft(profile.id)
+    setDraftId(null)
+    setNotes('')
+    setDetails([])
+    setCounts(emptyCounts())
+    setBusy(false)
+    notify(t('draftDiscarded'))
+    setShow(false)
+    await load()
   }
 
   function continueDraft(row: ReportRow) {
@@ -2120,7 +2158,7 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
     if (draftId) {
       const result = await supabase
         .from('daily_reports')
-        .update(payload)
+        .update(withoutReportIdentity(payload))
         .eq('id', draftId)
         .eq('coach_id', profile.id)
         .eq('is_finalized', false)
@@ -2186,7 +2224,7 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
     if (savedId) {
       const draftUpdate = await supabase
         .from('daily_reports')
-        .update({ ...content, status: 'draft', is_finalized: false, finalized_at: null, submitted_at: null })
+        .update({ ...withoutReportIdentity(content), status: 'draft', is_finalized: false, finalized_at: null, submitted_at: null })
         .eq('id', savedId)
         .eq('coach_id', profile.id)
         .eq('is_finalized', false)
@@ -2279,7 +2317,7 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
     }
     const { data, error } = await supabase
       .from('daily_reports')
-      .update({ status: 'reviewed', reviewed_by: profile.id, reviewed_at: new Date().toISOString() })
+      .update({ status: 'reviewed', reviewed_by: profile.id })
       .eq('id', row.id)
       .eq('is_finalized', true)
       .eq('status', 'submitted')
@@ -2329,9 +2367,22 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
       }
       const detailRows = await supabase
         .from('report_details')
-        .select('student_name_snapshot,observation,notes')
+        .select('student_name_snapshot,attendance_status,observation,incident,injury_details,notes')
         .eq('report_id', row.id)
-        .then(({ data }) => (data ?? []) as { student_name_snapshot: string; observation: string; notes: string }[])
+        .then(({ data }) => (data ?? []) as { student_name_snapshot: string; attendance_status: string | null; observation: string | null; incident: string | null; injury_details: string | null; notes: string | null }[])
+      let reviewerName = ''
+      if (row.reviewed_by) {
+        const { data: reviewer } = await supabase.from('profiles').select('full_name').eq('id', row.reviewed_by).maybeSingle()
+        reviewerName = (reviewer as { full_name?: string } | null)?.full_name ?? ''
+      }
+      const exportedStudents = detailRows.map((detail) => ({
+        name: detail.student_name_snapshot || '—',
+        status: detail.attendance_status || '—',
+        observation: detail.observation || '',
+        incident: detail.incident || '',
+        injuryDetails: detail.injury_details || '',
+        notes: detail.notes || '',
+      }))
 
       const templateInput: TemplateReportInput = {
         institutionName,
@@ -2343,11 +2394,9 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
         reportingPeriodEnd: row.reporting_period_end ?? null,
         issueDate: row.issue_date ?? null,
         submittedAt: row.submitted_at ?? null,
-        students: detailRows.map((detail) => ({
-          name: detail.student_name_snapshot,
-          observation: detail.observation,
-          notes: detail.notes,
-        })),
+        reviewedAt: row.reviewed_at ?? null,
+        reviewedBy: reviewerName,
+        students: exportedStudents,
       }
 
       // Use the institution's active Word template when one exists. The built-in
@@ -2377,6 +2426,9 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
           reportingPeriodEnd: row.reporting_period_end ?? null,
           issueDate: row.issue_date ?? null,
           submittedAt: row.submitted_at ?? null,
+          reviewedAt: row.reviewed_at ?? null,
+          reviewedBy: reviewerName,
+          students: exportedStudents,
         })
         fileName = reportFileName({
           reportDate: row.report_date,
@@ -2568,7 +2620,7 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
               </div>
             )}
             <div className="modal-actions">
-              <button type="button" className="secondary" onClick={() => setShow(false)}>{t('cancel')}</button>
+              <button type="button" className="secondary" disabled={busy} onClick={cancelReport}>{t('cancel')}</button>
               <button type="button" className="secondary" disabled={busy} onClick={saveDraft}>
                 {t('saveDraft')}
               </button>
@@ -2654,6 +2706,7 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [readers, setReaders] = useState<{ id: string; full_name: string; role: string; read_at: string }[]>([])
+  const [nonReaders, setNonReaders] = useState<{ id: string; full_name: string; role: string }[]>([])
   const [readersNoticeId, setReadersNoticeId] = useState<string | null>(null)
   const [readersLoading, setReadersLoading] = useState(false)
   const canPublish = ['manager', 'admin'].includes(profile.role)
@@ -2689,23 +2742,32 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
     setReadersLoading(true)
     setReadersNoticeId(noticeId)
     if (!isConfigured) { setReadersLoading(false); return }
-    const { data, error } = await supabase
-      .from('notice_reads')
-      .select('reader_id, read_at')
-      .eq('notice_id', noticeId)
-    if (error) { notify(error.message); setReadersLoading(false); return }
-    const readerIds = ((data ?? []) as { reader_id: string; read_at: string }[]).map((r) => r.reader_id)
-    if (readerIds.length === 0) { setReaders([]); setReadersLoading(false); return }
-    const { data: profiles } = await supabase
-      .from('profiles')
-      .select('id, full_name, role')
-      .in('id', readerIds)
-      .eq('institution_id', profile.institution_id)
-    const profileMap = new Map((profiles ?? []).map((p: any) => [p.id, p]))
-    setReaders(((data ?? []) as { reader_id: string; read_at: string }[]).map((r) => {
-      const p = profileMap.get(r.reader_id) as { full_name?: string; role?: string } | undefined
-      return { id: r.reader_id, full_name: p?.full_name ?? 'Unknown', role: p?.role ?? 'coach', read_at: r.read_at }
+    const [readsRes, membersRes] = await Promise.all([
+      supabase
+        .from('notice_reads')
+        .select('reader_id, read_at')
+        .eq('notice_id', noticeId),
+      supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .eq('institution_id', profile.institution_id)
+        .eq('account_status', 'active')
+        .order('full_name'),
+    ])
+    if (readsRes.error || membersRes.error) {
+      notify((readsRes.error || membersRes.error)?.message || t('errorGeneric'))
+      setReadersLoading(false)
+      return
+    }
+    const readRows = (readsRes.data ?? []) as { reader_id: string; read_at: string }[]
+    const members = (membersRes.data ?? []) as { id: string; full_name: string; role: string }[]
+    const memberMap = new Map(members.map((member) => [member.id, member]))
+    const readIds = new Set(readRows.map((row) => row.reader_id))
+    setReaders(readRows.flatMap((row) => {
+      const member = memberMap.get(row.reader_id)
+      return member ? [{ id: member.id, full_name: member.full_name, role: member.role, read_at: row.read_at }] : []
     }))
+    setNonReaders(members.filter((member) => !readIds.has(member.id)))
     setReadersLoading(false)
   }
 
@@ -2777,15 +2839,26 @@ function Notices({ profile, t }: { profile: Profile; t: T }) {
       ))}
       {readersNoticeId && (
         <Modal title={t('noticeReaders')} close={() => setReadersNoticeId(null)} closeLabel={t('close')}>
-          {readersLoading ? <Empty t={t} /> : readers.length === 0 ? <p className="muted">{t('noData')}</p> : (
-            <section className="panel">
-              {readers.map((r) => (
-                <div className="student-row" key={r.id}>
-                  <div className="grow"><b>{r.full_name}</b><small>{r.role}</small></div>
-                  <small>{formatDateTime(r.read_at)}</small>
-                </div>
-              ))}
-            </section>
+          {readersLoading ? <Empty t={t} /> : (
+            <>
+              <section className="panel">
+                <h3>{t('whoRead')} ({readers.length})</h3>
+                {readers.length === 0 ? <p className="muted">{t('noData')}</p> : readers.map((r) => (
+                  <div className="student-row" key={r.id}>
+                    <div className="grow"><b>{r.full_name}</b><small>{r.role}</small></div>
+                    <small>{formatDateTime(r.read_at)}</small>
+                  </div>
+                ))}
+              </section>
+              <section className="panel">
+                <h3>{t('whoNotRead')} ({nonReaders.length})</h3>
+                {nonReaders.length === 0 ? <p className="muted">{t('noData')}</p> : nonReaders.map((member) => (
+                  <div className="student-row" key={member.id}>
+                    <div className="grow"><b>{member.full_name}</b><small>{member.role}</small></div>
+                  </div>
+                ))}
+              </section>
+            </>
           )}
         </Modal>
       )}
@@ -2810,80 +2883,7 @@ function Notifications({ profile, t }: { profile: Profile; t: T }) {
   }[]>([])
   const [loading, setLoading] = useState(true)
   const [permission, setPermission] = useState<PushPermission>(() => pushEnv().permission)
-  const [pushSubscribed, setPushSubscribed] = useState(false)
-  const [pushBusy, setPushBusy] = useState(false)
   const nav = useNavigate()
-
-  async function checkPushSubscription() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
-    try {
-      const reg = await navigator.serviceWorker.ready
-      const sub = await reg.pushManager.getSubscription()
-      setPushSubscribed(!!sub)
-    } catch { /* ignore */ }
-  }
-
-  useEffect(() => { void checkPushSubscription() }, [])
-
-  async function subscribePush() {
-    if (!isConfigured) { notify(t('configMissing')); return }
-    setPushBusy(true)
-    try {
-      const perm = await requestPushPermission()
-      setPermission(perm)
-      if (perm !== 'granted') { notify(t('pushPermissionDenied')); setPushBusy(false); return }
-      const reg = await navigator.serviceWorker.ready
-      // VAPID public key must be provided via env or config; placeholder for now
-      const vapidPublicKey = (import.meta.env.VITE_VAPID_PUBLIC_KEY as string) || ''
-      if (!vapidPublicKey) { notify(t('pushNotSupported')); setPushBusy(false); return }
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-      })
-      const subJson = sub.toJSON()
-      const { error } = await supabase.from('push_subscriptions').upsert({
-        user_id: profile.id,
-        institution_id: profile.institution_id,
-        endpoint: subJson.endpoint,
-        p256dh: subJson.keys?.p256dh ?? '',
-        auth: subJson.keys?.auth ?? '',
-        user_agent: navigator.userAgent,
-      }, { onConflict: 'user_id,endpoint' })
-      if (error) { notify(error.message); setPushBusy(false); return }
-      setPushSubscribed(true)
-      notify(t('pushSubscribed'))
-    } catch (err) {
-      notify(err instanceof Error ? err.message : t('pushNotSupported'))
-    }
-    setPushBusy(false)
-  }
-
-  async function unsubscribePush() {
-    if (!isConfigured) { notify(t('configMissing')); return }
-    setPushBusy(true)
-    try {
-      const reg = await navigator.serviceWorker.ready
-      const sub = await reg.pushManager.getSubscription()
-      if (sub) {
-        await sub.unsubscribe()
-        await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint).eq('user_id', profile.id)
-      }
-      setPushSubscribed(false)
-      notify(t('pushUnsubscribe'))
-    } catch (err) {
-      notify(err instanceof Error ? err.message : t('pushNotSupported'))
-    }
-    setPushBusy(false)
-  }
-
-  function urlBase64ToUint8Array(base64String: string): Uint8Array {
-    const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
-    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/')
-    const rawData = window.atob(base64)
-    const outputArray = new Uint8Array(rawData.length)
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i)
-    return outputArray
-  }
 
   async function load() {
     setLoading(true)
@@ -2960,13 +2960,6 @@ function Notifications({ profile, t }: { profile: Profile; t: T }) {
             {permission === 'granted' && <span className="pill success">{t('notificationsOn')}</span>}
             {(permission === 'denied' || !env.supported || permission === 'unsupported') && (
               <span className="pill warning">{t('notificationsBlocked')}</span>
-            )}
-            {permission === 'granted' && 'PushManager' in window && (
-              pushSubscribed ? (
-                <button className="secondary action-btn" onClick={() => { void unsubscribePush() }} disabled={pushBusy}>{t('pushUnsubscribe')}</button>
-              ) : (
-                <button className="secondary action-btn" onClick={() => { void subscribePush() }} disabled={pushBusy}>{t('pushSubscribe')}</button>
-              )
             )}
             {unreadCount > 0 && <button className="secondary action-btn" onClick={markAllRead}>{t('markRead')}</button>}
           </div>
@@ -3113,14 +3106,40 @@ function Messages({ profile, t }: { profile: Profile; t: T }) {
     const { data, error } = await query
     if (error) { notify(error.message); return }
     const rows = ((data ?? []) as ChatMessage[]).slice().reverse()
+    const ownMessageIds = rows.filter((row) => row.sender_id === profile.id).map((row) => row.id)
+    const receiptsByMessage = new Map<string, { id: string; full_name: string; read_at: string }[]>()
+    if (ownMessageIds.length) {
+      const { data: receiptRows, error: receiptError } = await supabase
+        .from('message_reads')
+        .select('message_id,reader_id,read_at')
+        .in('message_id', ownMessageIds)
+      if (receiptError) notify(receiptError.message)
+      const receipts = (receiptRows ?? []) as { message_id: string; reader_id: string; read_at: string }[]
+      const readerIds = [...new Set(receipts.map((receipt) => receipt.reader_id))]
+      let readerNames = new Map<string, string>()
+      if (readerIds.length) {
+        const { data: readerProfiles, error: readerError } = await supabase
+          .from('profiles')
+          .select('id,full_name')
+          .in('id', readerIds)
+        if (readerError) notify(readerError.message)
+        readerNames = new Map(((readerProfiles ?? []) as { id: string; full_name: string }[]).map((person) => [person.id, person.full_name]))
+      }
+      for (const receipt of receipts) {
+        const list = receiptsByMessage.get(receipt.message_id) ?? []
+        list.push({ id: receipt.reader_id, full_name: readerNames.get(receipt.reader_id) || t('coach'), read_at: receipt.read_at })
+        receiptsByMessage.set(receipt.message_id, list)
+      }
+    }
+    const hydratedRows = rows.map((row) => ({ ...row, readBy: receiptsByMessage.get(row.id) ?? [] }))
     const nextUrls = { ...mediaUrls }
     await Promise.all(rows.filter((row) => row.media_path).map(async (row) => {
       const { data: link } = await supabase.storage.from('trainer-media').createSignedUrl(row.media_path as string, 3600)
       if (link?.signedUrl) nextUrls[row.id] = link.signedUrl
     }))
     setMediaUrls(nextUrls)
-    if (older) setItems((prev) => [...rows, ...prev])
-    else setItems(rows)
+    if (older) setItems((prev) => [...hydratedRows, ...prev])
+    else setItems(hydratedRows)
     setHasMore(rows.length === 50)
   }
 
@@ -3143,6 +3162,9 @@ function Messages({ profile, t }: { profile: Profile; t: T }) {
         // the tab is hidden leave it unread so the badge is truthful on return.
         if (document.visibilityState === 'visible') void markConversationRead(current.id)
       })
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'message_reads',
+      }, () => { void loadMessages(current.id) })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [current?.id])
@@ -3338,7 +3360,14 @@ function Messages({ profile, t }: { profile: Profile; t: T }) {
                         : message.message_type === 'audio'
                           ? <audio controls src={url} />
                           : <a href={url} target="_blank" rel="noreferrer">{t('openAttachment')}</a>)}
-                      <small>{formatTime(message.created_at)}</small>
+                      <small>
+                        {formatTime(message.created_at)}
+                        {message.sender_id === profile.id && (
+                          message.readBy?.length
+                            ? ` · ${t('messageReadBy')}: ${message.readBy.map((reader) => reader.full_name).join('، ')}`
+                            : ` · ${t('messageNotRead')}`
+                        )}
+                      </small>
                     </div>
                   )
                 })}
@@ -4224,95 +4253,164 @@ function ClassManagement({ profile, t }: { profile: Profile; t: T }) {
   )
 }
 
-function FollowUpQueue({ profile, t }: { profile: Profile; t: T }) {
-  const [items, setItems] = useState<
-    (ReturnType<typeof computeAbsenceFollowUps>[number] & { handled: boolean; lastFollowUpAt: string | null })[]
-  >([])
-  const [names, setNames] = useState<Record<string, { student_code: string; full_name: string }>>({})
+function DailyStatus({ profile, t }: { profile: Profile; t: T }) {
+  type AttendanceStatusRow = { id: string; student_id: string; status: string; session_date: string }
+  type RestrictionRow = { student_id: string; student_code: string; full_name: string; record_type: string; start_date: string | null; end_date: string | null }
+  const [date, setDate] = useState(localDate())
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceStatusRow[]>([])
+  const [restrictions, setRestrictions] = useState<RestrictionRow[]>([])
+  const [roster, setRoster] = useState<Record<string, { student_code: string; full_name: string }>>({})
   const [loading, setLoading] = useState(true)
-  const [updating, setUpdating] = useState<string | null>(null)
-  const admin = ['owner', 'manager', 'admin'].includes(profile.role)
 
   async function load() {
     setLoading(true)
-    if (!isConfigured || !profile.institution_id) { setLoading(false); return }
+    if (!isConfigured || !profile.institution_id || profile.role === 'owner') { setLoading(false); return }
+    const [studentsRes, attendanceRes, restrictionRes] = await Promise.all([
+      supabase.from('students').select('id,student_code,full_name').eq('institution_id', profile.institution_id),
+      supabase.from('attendance_records').select('id,student_id,status,session_date')
+        .eq('institution_id', profile.institution_id).eq('session_date', date)
+        .neq('status', 'present').order('status'),
+      supabase.rpc('get_active_student_restrictions', { p_on_date: date }),
+    ])
+    if (studentsRes.error) notify(studentsRes.error.message)
+    if (attendanceRes.error) notify(attendanceRes.error.message)
+    if (restrictionRes.error) notify(restrictionRes.error.message)
+    const nextRoster: Record<string, { student_code: string; full_name: string }> = {}
+    for (const student of (studentsRes.data ?? []) as { id: string; student_code: string; full_name: string }[]) {
+      nextRoster[student.id] = { student_code: student.student_code, full_name: student.full_name }
+    }
+    setRoster(nextRoster)
+    setAttendanceRows((attendanceRes.data ?? []) as AttendanceStatusRow[])
+    setRestrictions((restrictionRes.data ?? []) as RestrictionRow[])
+    setLoading(false)
+  }
+
+  useEffect(() => { void load() }, [profile.id, profile.institution_id, profile.role, date])
+
+  const statusLabel = (status: string) => status === 'medical_exemption' ? t('medicalExemption') : t(status)
+  const restrictionLabel = (kind: string) => kind === 'exemption' ? t('medicalExemption') : kind === 'permission' ? t('permission') : t('other')
+
+  return (
+    <>
+      <Heading title={t('dailyStatus')} subtitle={t('dailyStatusHint')} />
+      <section className="panel">
+        <label>{t('date')}<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <div className="status-count-row">
+          <span>{t('dailyAttendanceStatuses')}: <b>{attendanceRows.length}</b></span>
+          <span>{t('activePermissionsExemptions')}: <b>{restrictions.length}</b></span>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-head"><h3>{t('dailyAttendanceStatuses')}</h3><span className="muted">{date}</span></div>
+        {loading ? <Empty t={t} /> : attendanceRows.length === 0 ? <p className="muted">{t('noDailyStatuses')}</p> : (
+          <div className="report-list">
+            {attendanceRows.map((row) => {
+              const student = roster[row.student_id]
+              return <div className="report-row" key={row.id}>
+                <div className="report-icon"><Activity size={17} /></div>
+                <div className="grow"><b>{student ? `${student.student_code} · ${student.full_name}` : t('students')}</b><small>{row.session_date}</small></div>
+                <span className={`pill ${row.status === 'absent' ? 'warning' : 'success'}`}>{statusLabel(row.status)}</span>
+              </div>
+            })}
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <div className="panel-head"><h3>{t('activePermissionsExemptions')}</h3><span className="muted">{t('autoExpiryHint')}</span></div>
+        {loading ? <Empty t={t} /> : restrictions.length === 0 ? <p className="muted">{t('noActiveRestrictions')}</p> : (
+          <div className="report-list">
+            {restrictions.map((row, index) => <div className="report-row" key={`${row.student_id}-${row.record_type}-${index}`}>
+              <div className="report-icon"><HeartPulse size={17} /></div>
+              <div className="grow"><b>{row.student_code} · {row.full_name}</b><small>{row.start_date || '—'} → {row.end_date || '—'}</small></div>
+              <span className="pill warning">{restrictionLabel(row.record_type)}</span>
+            </div>)}
+          </div>
+        )}
+      </section>
+    </>
+  )
+}
+
+function FollowUpQueue({ profile, t }: { profile: Profile; t: T }) {
+  type FollowUpRow = {
+    id: string
+    student_id: string
+    absences: number
+    status: 'awaiting_return' | 'active' | 'completed'
+    streak_end: string
+    return_date: string | null
+    sessions_seen: number
+    handled_at: string | null
+    last_follow_up_at: string | null
+  }
+  type FollowUpItem = {
+    id: string
+    studentId: string
+    streak: number
+    state: 'open' | 'returned'
+    sessionsSinceReturn: number
+    lastSessionDate: string
+    lastAbsentDate: string
+    handled: boolean
+    lastFollowUpAt: string | null
+  }
+  const [items, setItems] = useState<FollowUpItem[]>([])
+  const [names, setNames] = useState<Record<string, { student_code: string; full_name: string }>>({})
+  const [loading, setLoading] = useState(true)
+  const [updating, setUpdating] = useState<string | null>(null)
+  const canAccess = profile.role !== 'owner' && Boolean(profile.institution_id)
+
+  async function load() {
+    setLoading(true)
+    if (!isConfigured || !profile.institution_id || !canAccess) { setLoading(false); return }
     const institutionId = profile.institution_id
-    const [attendanceRes, studentsRes, followRes] = await Promise.all([
-      supabase
-        .from('attendance_records')
-        .select('student_id,session_date,status,session_key')
-        .eq('institution_id', institutionId)
-        .order('session_date', { ascending: false })
-        .limit(5000),
+    const [studentsRes, followRes] = await Promise.all([
       supabase
         .from('students')
         .select('id,student_code,full_name')
         .eq('institution_id', institutionId),
       supabase
         .from('absence_followups')
-        .select('student_id,status,last_follow_up_at')
-        .eq('institution_id', institutionId),
+        .select('id,student_id,absences,status,streak_end,return_date,sessions_seen,handled_at,last_follow_up_at')
+        .eq('institution_id', institutionId)
+        .in('status', ['awaiting_return', 'active'])
+        .order('streak_end', { ascending: false }),
     ])
-    if (attendanceRes.error) notify(attendanceRes.error.message)
     if (studentsRes.error) notify(studentsRes.error.message)
-    // The follow-up table is only the manual "handled" overlay. A schema that
-    // lacks it must not hide the queue, which is computed from real attendance.
-    const stored = followRes.error ? [] : ((followRes.data ?? []) as {
-      student_id: string; status?: string | null; last_follow_up_at?: string | null
-    }[])
+    if (followRes.error) notify(followRes.error.message)
     const roster: Record<string, { student_code: string; full_name: string }> = {}
     for (const student of (studentsRes.data ?? []) as { id: string; student_code: string; full_name: string }[]) {
       roster[student.id] = { student_code: student.student_code, full_name: student.full_name }
     }
     setNames(roster)
-    const computed = computeAbsenceFollowUps((attendanceRes.data ?? []) as {
-      student_id: string; session_date: string; status: string; session_key?: string | null
-    }[])
-    setItems(withStoredState(computed, stored))
+    const rows = (followRes.data ?? []) as FollowUpRow[]
+    setItems(rows.map((row) => ({
+      id: row.id,
+      studentId: row.student_id,
+      streak: row.absences,
+      state: row.status === 'awaiting_return' ? 'open' : 'returned',
+      sessionsSinceReturn: row.sessions_seen ?? 0,
+      lastSessionDate: row.return_date ?? row.streak_end,
+      lastAbsentDate: row.streak_end,
+      handled: Boolean(row.handled_at),
+      lastFollowUpAt: row.handled_at ?? row.last_follow_up_at,
+    })))
     setLoading(false)
   }
 
-  useEffect(() => { void load() }, [profile.institution_id])
+  useEffect(() => { void load() }, [profile.institution_id, profile.id])
 
-  async function markHandled(studentId: string, nextStatus: 'done' | 'open') {
+  async function markHandled(item: FollowUpItem) {
     if (!isConfigured || !profile.institution_id) { notify(t('configMissing')); return }
-    setUpdating(studentId)
-    const rpc = await supabase.rpc('mark_followup_handled', {
-      p_student_id: studentId,
-      p_status: nextStatus,
-    })
-    if (!rpc.error) {
-      setUpdating(null)
-      setItems((prev) => prev.map((item) => (
-        item.studentId === studentId
-          ? { ...item, handled: nextStatus === 'done', lastFollowUpAt: new Date().toISOString() }
-          : item
-      )))
-      notify(t('savedOk'))
-      return
-    }
-    // Older databases may not expose the helper; try the table directly and
-    // treat "zero rows" as a real failure instead of a false success.
-    const fallback = await supabase
-      .from('absence_followups')
-      .update({ status: nextStatus, last_follow_up_at: new Date().toISOString() })
-      .eq('student_id', studentId)
-      .eq('institution_id', profile.institution_id)
-      .select('student_id')
+    setUpdating(item.id)
+    const { error } = await supabase.rpc('mark_followup_handled', { p_id: item.id })
     setUpdating(null)
-    if (fallback.error || !affectedRows(fallback.data)) {
-      notify(fallback.error?.message || t('followUpUpdateFailed'))
-      return
-    }
-    setItems((prev) => prev.map((item) => (
-      item.studentId === studentId
-        ? { ...item, handled: nextStatus === 'done', lastFollowUpAt: new Date().toISOString() }
-        : item
-    )))
+    if (error) { notify(error.message); return }
+    await load()
     notify(t('savedOk'))
   }
 
-  if (!admin) return <Denied t={t} />
+  if (!canAccess) return <Denied t={t} />
 
   return (
     <>
@@ -4325,7 +4423,7 @@ function FollowUpQueue({ profile, t }: { profile: Profile; t: T }) {
             {items.map((item) => {
               const student = names[item.studentId]
               return (
-                <div key={item.studentId} className="attendance-row">
+                <div key={item.id} className="attendance-row">
                   <div className="grow">
                     <b>{student?.full_name || item.studentId}</b>
                     <small>#{student?.student_code || '—'} · {item.streak} {t('absences')}</small>
@@ -4340,14 +4438,11 @@ function FollowUpQueue({ profile, t }: { profile: Profile; t: T }) {
                     {item.handled ? t('markHandled') : t('followUpNone')}
                   </span>
                   <small>{t('lastFollowUp')}: {item.lastFollowUpAt ? formatDateTime(item.lastFollowUpAt) : t('never')}</small>
-                  <div className="action-btns">
-                    {!item.handled && (
-                      <button className="secondary small" disabled={updating === item.studentId} onClick={() => { void markHandled(item.studentId, 'done') }}>{t('markFollowUpDone')}</button>
-                    )}
-                    {item.handled && (
-                      <button className="secondary small" disabled={updating === item.studentId} onClick={() => { void markHandled(item.studentId, 'open') }}>{t('markFollowUpOpen')}</button>
-                    )}
-                  </div>
+                  {!item.handled && (
+                    <div className="action-btns">
+                      <button className="secondary small" disabled={updating === item.id} onClick={() => { void markHandled(item) }}>{t('markFollowUpDone')}</button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -4435,7 +4530,7 @@ function InstitutionSettings({ profile, t }: { profile: Profile; t: T }) {
   // live project does not expose a verified, transactional `delete_institution`
   // RPC, and `profiles.institution_id` is ON DELETE RESTRICT, so a direct delete
   // would fail or leave orphaned accounts. The prepared server-side change lives
-  // in SUPABASE_PENDING_CHANGES.sql and requires explicit production approval.
+  // in supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql; that legacy file must not be executed.
   const deletionAvailable = false
 
   if (loading) return <Empty t={t} />

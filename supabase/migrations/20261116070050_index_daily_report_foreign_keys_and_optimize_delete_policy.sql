@@ -1,0 +1,11 @@
+-- Reconstructed from the production indexes on 2026-11-19.
+CREATE INDEX IF NOT EXISTS daily_reports_institution_id_idx ON public.daily_reports(institution_id);
+CREATE INDEX IF NOT EXISTS daily_reports_reviewed_by_idx ON public.daily_reports(reviewed_by);
+CREATE INDEX IF NOT EXISTS daily_reports_shift_id_idx ON public.daily_reports(shift_id);
+CREATE INDEX IF NOT EXISTS idx_report_details_created_by_fk ON public.report_details(created_by);
+CREATE INDEX IF NOT EXISTS idx_report_details_institution_id ON public.report_details(institution_id);
+CREATE INDEX IF NOT EXISTS idx_report_details_report_id ON public.report_details(report_id);
+CREATE INDEX IF NOT EXISTS idx_report_details_student_id ON public.report_details(student_id);
+CREATE INDEX IF NOT EXISTS idx_report_exports_exported_by_fk ON public.report_exports(exported_by);
+CREATE INDEX IF NOT EXISTS idx_report_exports_institution_id_fk ON public.report_exports(institution_id);
+CREATE INDEX IF NOT EXISTS idx_report_exports_report_id_fk ON public.report_exports(report_id);
