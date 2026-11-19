@@ -530,3 +530,48 @@ tr:last-child td{border-bottom:0}
 }
 
 .import-preview-summary{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}.import-preview-table{max-height:260px;border:1px solid var(--tt-line,#e5e7eb);border-radius:10px}.import-preview-table table{min-width:320px}.import-preview-table th{position:sticky;top:0;background:#f7faf7;z-index:1}.status-count-row{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px;color:var(--tt-muted);font-size:12px}.status-count-row b{color:var(--tt-green-800)}
+
+/* Management reports: protected Word-template preview with editable slots only. */
+.word-report-editor { overflow: hidden; }
+.word-document-preview {
+  background: #fff;
+  color: #1f2937;
+  border: 1px solid #d8dee8;
+  border-radius: 10px;
+  padding: clamp(14px, 3vw, 30px);
+  margin: 14px 0;
+  overflow-x: auto;
+  min-height: 220px;
+  line-height: 1.65;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, .05);
+  overflow-wrap: anywhere;
+}
+.word-document-preview p { margin: .45em 0; white-space: pre-wrap; }
+.word-document-preview h1, .word-document-preview h2, .word-document-preview h3,
+.word-document-preview h4, .word-document-preview h5, .word-document-preview h6 { margin: .7em 0 .35em; }
+.word-document-preview .word-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+.word-document-preview .word-table td { border: 1px solid #aeb8c6; padding: 6px 8px; min-width: 32px; vertical-align: top; }
+.word-document-preview .word-fill-slot {
+  display: inline-block;
+  min-width: 96px;
+  min-height: 1.35em;
+  padding: 0 5px;
+  margin: 0 2px;
+  border-bottom: 1.5px dashed #2876c7;
+  background: #eef6ff;
+  color: #174d83;
+  white-space: pre-wrap;
+  vertical-align: baseline;
+  outline: none;
+  cursor: text;
+}
+.word-document-preview .word-fill-slot:focus { background: #dceeff; border-bottom-style: solid; }
+.word-document-preview .word-fill-slot.required::after { content: ''; }
+.word-document-preview .word-filled-value { white-space: pre-wrap; }
+@media (max-width: 640px) {
+  .word-document-preview { padding: 12px; font-size: 14px; }
+  .word-document-preview .word-table { min-width: 420px; }
+  .word-report-editor .actions { display: flex; flex-wrap: wrap; }
+}
+
+.word-document-preview .word-header, .word-document-preview .word-footer { border-inline-start: 3px solid #d5deea; padding-inline-start: 10px; margin: 8px 0; color: #4b5563; }

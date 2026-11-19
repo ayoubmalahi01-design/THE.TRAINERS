@@ -3,7 +3,7 @@
 // approval", so rejected and broken accounts received the wrong message.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { accountGate, gateTitleKey, gateBodyKey, gateAllowsRetry } from '../src/lib/account-gate.ts'
+import { accountGate, gateTitleKey, gateBodyKey, gateAllowsRetry, gateCanAcceptInvitation } from '../src/lib/account-gate.ts'
 import { dict, LANGS } from '../src/lib/i18n.ts'
 
 test('an active account passes the gate', () => {
@@ -64,4 +64,13 @@ test('every gate message key exists in all three dictionaries', () => {
       }
     }
   }
+})
+
+test('a rejected account may accept a new invitation after re-invitation', () => {
+  assert.equal(gateCanAcceptInvitation('rejected'), true)
+  assert.equal(gateCanAcceptInvitation('pending'), true)
+  assert.equal(gateCanAcceptInvitation('missing'), true)
+  assert.equal(gateCanAcceptInvitation('suspended'), false)
+  assert.equal(gateCanAcceptInvitation('error'), false)
+  assert.equal(gateCanAcceptInvitation('active'), false)
 })

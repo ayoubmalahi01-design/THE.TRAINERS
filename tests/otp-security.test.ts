@@ -226,7 +226,7 @@ test('the invitee accepts the live invitation from their own session', () => {
 test('the role matrix cannot produce an owner', () => {
   assert.match(invite, /owner:\s*\['manager',\s*'admin',\s*'coach'\]/)
   assert.match(invite, /manager:\s*\['admin',\s*'coach'\]/)
-  assert.match(invite, /admin:\s*\['coach'\]/)
+  assert.match(invite, /admin:\s*\['admin',\s*'coach'\]/)
   assert.match(invite, /coach:\s*\[\]/)
   assert.match(invite, /role === 'owner'/)
 })

@@ -4,6 +4,9 @@ project_id = "the-trainers"
 [functions.invite-user]
 verify_jwt = true
 
+[functions.delete-institution]
+verify_jwt = true
+
 [functions.verify-otp]
 verify_jwt = true
 

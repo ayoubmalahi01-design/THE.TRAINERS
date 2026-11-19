@@ -25,6 +25,7 @@ const invitations = read('supabase/INVITATIONS_OTP_INCREMENTAL.sql')
 const repair = read('supabase/manual-applied/legacy/0003_account_management_repair.sql')
 const app = read('src/App.tsx')
 const inviteFunction = read('supabase/functions/invite-user/index.ts')
+const reinviteMigration = read('supabase/migrations/20261119155330_allow_reinvitation_after_rejection.sql')
 
 /** Return the smallest block starting at `start` and ending at the first `end`. */
 function block(source: string, start: string, end: string): string {
@@ -46,7 +47,7 @@ function functionBody(source: string, name: string, nextName: string): string {
 test('the Edge Function matrix is identical to the browser policy', () => {
   assert.match(inviteFunction, /owner:\s*\[\s*'manager',\s*'admin',\s*'coach'\s*\]/)
   assert.match(inviteFunction, /manager:\s*\[\s*'admin',\s*'coach'\s*\]/)
-  assert.match(inviteFunction, /admin:\s*\[\s*'coach'\s*\]/)
+  assert.match(inviteFunction, /admin:\s*\[\s*'admin',\s*'coach'\s*\]/)
   assert.match(inviteFunction, /coach:\s*\[\s*\]/)
   for (const actor of Object.keys(INVITE_MATRIX) as (keyof typeof INVITE_MATRIX)[]) {
     for (const target of ASSIGNABLE_ROLES) {
@@ -300,4 +301,12 @@ test('the owner-only review path cannot be reached by a manager through the poli
   assert.equal(canReviewAccount('manager', 'owner', true), false)
   assert.equal(canReviewAccount('admin', 'coach', true), false)
   assert.equal(canReviewAccount('coach', 'coach', true), false)
+})
+
+
+test('a rejected profile can accept a new pending invitation without auto-activation', () => {
+  assert.match(reinviteMigration, /account_status::text = 'suspended'/)
+  assert.match(reinviteMigration, /NOT IN \('pending', 'rejected'\)/)
+  assert.match(reinviteMigration, /CASE WHEN v_keep_active THEN 'active' ELSE 'pending' END/)
+  assert.doesNotMatch(reinviteMigration, /DROP TABLE|TRUNCATE|DELETE FROM public\./i)
 })

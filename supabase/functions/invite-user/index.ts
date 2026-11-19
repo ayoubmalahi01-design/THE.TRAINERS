@@ -45,12 +45,12 @@ type Actor = {
   account_status: string
 }
 
-// No path may produce an owner. An Administrator may invite a Coach only, and
-// always inside their own institution.
+// No path may produce an owner. Administration may invite another Admin or Coach,
+// always inside their own institution; Managers may invite Admin or Coach.
 const INVITE_MATRIX: Record<Role, InvitableRole[]> = {
   owner: ['manager', 'admin', 'coach'],
   manager: ['admin', 'coach'],
-  admin: ['coach'],
+  admin: ['admin', 'coach'],
   coach: [],
 }
 

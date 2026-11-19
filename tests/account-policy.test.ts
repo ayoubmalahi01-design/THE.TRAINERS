@@ -19,7 +19,7 @@ const ROLES = ['owner', 'manager', 'admin', 'coach'] as const
 test('every role invites exactly the targets the matrix allows', () => {
   assert.deepEqual(INVITE_MATRIX.owner, ['manager', 'admin', 'coach'])
   assert.deepEqual(INVITE_MATRIX.manager, ['admin', 'coach'])
-  assert.deepEqual(INVITE_MATRIX.admin, ['coach'])
+  assert.deepEqual(INVITE_MATRIX.admin, ['admin', 'coach'])
   assert.deepEqual(INVITE_MATRIX.coach, [])
 })
 
@@ -43,10 +43,11 @@ test('canInvite matches the matrix exactly', () => {
   }
 })
 
-test('Administration invites coaches only and never reviews or manages accounts', () => {
+test('Administration can invite Admin and Coach but cannot review or manage accounts', () => {
   assert.equal(canManageAccounts('admin'), false)
   assert.equal(canInvite('admin', 'coach'), true)
-  for (const target of ['owner', 'manager', 'admin'] as const) {
+  assert.equal(canInvite('admin', 'admin'), true)
+  for (const target of ['owner', 'manager'] as const) {
     assert.equal(canInvite('admin', target), false, `admin must not invite ${target}`)
   }
   for (const target of ROLES) {

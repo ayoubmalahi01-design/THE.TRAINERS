@@ -44,8 +44,9 @@ export async function resolveSessionKey(coachId: string): Promise<string> {
 export async function loadAttendance(
   date: string,
   coachId: string,
+  sessionKeyOverride?: string,
 ): Promise<{ records: AttendanceRecord[]; error: string | null; sessionKey: string }> {
-  const sessionKey = await resolveSessionKey(coachId)
+  const sessionKey = sessionKeyOverride ?? (await resolveSessionKey(coachId))
   const base = () =>
     supabase.from('attendance_records').select('student_id,status,reason').eq('session_date', date)
 

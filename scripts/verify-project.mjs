@@ -19,8 +19,10 @@ const required = [
   'supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql',
   'supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql',
   'supabase/migrations/20261119132835_coach_management_report_forms.sql',
+  'supabase/migrations/20261119155330_allow_reinvitation_after_rejection.sql',
   'src/lib/report-template.ts',
   'src/lib/report-template-render.ts',
+  'src/lib/word-template-editor.ts',
   'tests/otp-security.test.ts',
   'tests/account-policy.test.ts',
   'tests/account-permissions.test.ts',
@@ -57,12 +59,17 @@ if (missing.length) {
 const sql = read('supabase/THE_TRAINERS_SETUP.sql')
 const migration = read('supabase/INVITATIONS_OTP_INCREMENTAL.sql')
 const repair = read('supabase/manual-applied/legacy/0003_account_management_repair.sql')
+const reinviteSQL = read('supabase/migrations/20261119155330_allow_reinvitation_after_rejection.sql')
 const policy = read('src/lib/account-policy.ts')
 const app = read('src/App.tsx')
 const studentImport = read('src/lib/student-import.ts')
 const statusMigration = read('supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql')
 const privateRpcMigration = read('supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql')
 const managementReportMigration = read('supabase/migrations/20261119132835_coach_management_report_forms.sql')
+const institutionDeletionMigration = read('supabase/migrations/20261119161736_secure_institution_deletion.sql')
+const institutionPrivateMigration = read('supabase/migrations/20261119162052_private_institution_deletion_rpc.sql')
+const institutionGuardMigration = read('supabase/migrations/20261119163829_institution_deletion_profile_guard_context.sql')
+const institutionStorageMigration = read('supabase/migrations/20261119162348_delegate_institution_storage_cleanup.sql')
 const styles = read('src/styles.css')
 const envExample = read('.env.example')
 const config = read('supabase/config.toml')
@@ -159,14 +166,17 @@ const checks = [
   ['medical storage is admin and institution scoped', /trainer_medical_manager_admin_read[\s\S]*?current_app_role\(\)\s+in\s+\('manager','admin'\)[\s\S]*?current_institution_id\(\)::text/i.test(sql)],
   ['automatic report counts from attendance', /attendance_records[\s\S]*?present_count/.test(app)],
   ['admin report review workflow', /reports_admin_review/.test(sql) && /reviewed_by/.test(app)],
-  ['owner, manager and admin invitation matrix', /owner:\s*\['manager',\s*'admin',\s*'coach'\]/.test(policy) && /manager:\s*\['admin',\s*'coach'\]/.test(policy) && /admin:\s*\['coach'\]/.test(policy) && /coach:\s*\[\]/.test(policy)],
-  ['administration invites coaches only', /admin:\s*\['coach'\]/.test(invite) && /coach:\s*\[\]/.test(invite) && !/Coaches may invite coaches only/.test(invite)],
+  ['owner, manager and admin invitation matrix', /owner:\s*\['manager',\s*'admin',\s*'coach'\]/.test(policy) && /manager:\s*\['admin',\s*'coach'\]/.test(policy) && /admin:\s*\['admin',\s*'coach'\]/.test(policy) && /coach:\s*\[\]/.test(policy)],
+  ['administration invites admin and coach', /admin:\s*\['admin',\s*'coach'\]/.test(invite) && /coach:\s*\[\]/.test(invite) && !/Coaches may invite coaches only/.test(invite)],
   ['account review uses atomic RPC', /review_account/.test(repair) && /reviewAccount\(person\.id, action\)/.test(app)],
   ['team screen no longer writes profiles directly', !between(app, 'function Team', 'function Medical').includes("profiles').update")],
   ['administration team screen is read-only', /readOnlyAccounts/.test(app) && /canReviewAccount\(/.test(app)],
   ['messages screen no longer invites coaches', !between(app, 'function Messages', 'function OwnerConsole').includes('invite-user') && !between(app, 'function Messages', 'function OwnerConsole').includes('inviteCoach')],
   ['owner console can sync orphan profiles', /sync_missing_profiles/.test(repair) && /sync_missing_profiles/.test(app)],
   ['pending gate accepts the caller’s live email invitation', /my_pending_invitation/.test(repair) && /my_pending_invitation/.test(app) && /accept_email_invitation/.test(app)],
+  ['re-invitation after rejection is supported by the additive SQL migration', /NOT IN \('pending', 'rejected'\)/.test(reinviteSQL) && /account_status::text = 'suspended'/.test(reinviteSQL)],
+  ['rejected account gate permits accepting a new invitation', /gateCanAcceptInvitation/.test(app) && /state === 'rejected'/.test(read("src/lib/account-gate.ts"))],
+  ['service worker cache version updated for invitation policy release', /the-trainers-shell-v4/.test(read('public/sw.js'))],
   ['invitation acceptance never activates the account', /awaitingApproval/.test(app) && /invitationNoActivation/.test(app)],
   ['edge-unreachable errors are mapped', /FunctionsFetchError/.test(app) && /edge_unreachable/.test(app)],
 
@@ -212,7 +222,7 @@ const checks = [
   ['delivery functions do not require a browser JWT', /\[functions\.send-whatsapp\][\s\S]*?verify_jwt\s*=\s*false/.test(config) && /\[functions\.send-sms\][\s\S]*?verify_jwt\s*=\s*false/.test(config)],
   ['invitee accepts the invitation from their own session', /rpc\('my_pending_invitation'\)/.test(app) && /rpc\('accept_email_invitation'[\s\S]{0,120}?p_invitation_id:\s*invitation\.id/.test(app)],
   ['browser never supplies a foreign invitation id', !/accept_email_invitation[\s\S]{0,200}?p_invitation_id:\s*(?!invitation\.id)[a-zA-Z_]+\s*[,}]/.test(app)],
-  ['role matrix: owner may not invite owners', /owner:\s*\['manager',\s*'admin',\s*'coach'\]/.test(invite) && /manager:\s*\['admin',\s*'coach'\]/.test(invite) && /admin:\s*\['coach'\]/.test(invite) && /coach:\s*\[\]/.test(invite)],
+  ['role matrix: owner may not invite owners', /owner:\s*\['manager',\s*'admin',\s*'coach'\]/.test(invite) && /manager:\s*\['admin',\s*'coach'\]/.test(invite) && /admin:\s*\['admin',\s*'coach'\]/.test(invite) && /coach:\s*\[\]/.test(invite)],
   ['email invitation flow is preserved', /inviteUserByEmail/.test(invite) && /delivery_method: 'email'/.test(invite)],
 
   // ------------------------------------------------------- repair integrity
@@ -239,12 +249,22 @@ const checks = [
   ['coach can open institution classes in read-only mode', /path="\/classes" element=\{!owner \? <ClassManagement/.test(app) && /const canManage = profile.role === 'manager' \|\| profile.role === 'admin'/.test(app) && /from\('students'\).*class_id/.test(app)],
   ['mobile sidebar has a contained vertical scroll region', /\.sidebar nav\{flex:1 1 auto;min-height:0;overflow-y:auto/.test(styles)],
   ['management report form is separate from daily reports', /path="\/management-reports"/.test(app) && /from\('template_reports'\)/.test(app) && /from\('daily_reports'\)/.test(app)],
-  ['admin can configure fillable template fields', /form_fields: parseFieldLines\(\)/.test(app) && /managementReportFields/.test(app)],
+  ['admin derives fillable fields from uploaded Word placeholders', /inspectWordTemplate\(await file\.arrayBuffer\(\), \{\}, false\)\.fields/.test(app) && /form_fields: detectedFields \|\| \[\]/.test(app)],
+  ['coach edits only designated Word-template placeholders', /contenteditable=\"true\"/.test(read('src/lib/word-template-editor.ts')) && /readWordFieldValues/.test(app)],
+  ['Word report export fills dynamic and required placeholders', /renderReportTemplate\(await data\.arrayBuffer\(\), input, row\.responses/.test(app) && /input_required_/.test(read('src/lib/report-template-render.ts'))],
+  ['owner dashboard uses platform metrics and does not load reports', /profile\.role === 'owner'[\s\S]*?institutionsRes/.test(app) && /profile\.role !== 'owner' && <section className=\"panel\">/.test(app)],
+  ['pending accounts are excluded from the owner all-accounts list', /accounts\.filter\(\(person\) => person\.account_status !== 'pending'\)/.test(app)],
+  ['coach mobile navigation has five destinations', /viewProfile\.role === 'coach'[\s\S]*?\['\/reports', ClipboardList, 'reports'\],[\s\S]*?\]\s*:/.test(app)],
+  ['invitation acceptance is deep-link only in the active sidebar', !/\['\/accept-invitation', ShieldCheck, 'acceptInvitation'\]/.test(app) && /path=\"\/accept-invitation\"/.test(app)],
   ['management reports use immutable final submission RPC', /submit_template_report/.test(app) && /CREATE OR REPLACE FUNCTION public.submit_template_report/.test(managementReportMigration) && /Submitted management report is immutable/.test(managementReportMigration)],
   ['management report migration preserves institution and role isolation', /current_institution_id\(\)/.test(managementReportMigration) && /is_platform_owner\(\)/.test(managementReportMigration) && /coach_id = auth\.uid\(\)/.test(managementReportMigration)],
   ['absence queue uses persisted trigger-generated follow-ups', /absence_followups/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && /mark_followup_handled/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && !/computeAbsenceFollowUps/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings'))],
   ['read receipts are per message and reader', /message_reads\(message_id, reader_id, read_at\)/i.test(sql) && /primary key \(message_id, reader_id\)/i.test(sql) && /on conflict \(message_id, reader_id\)/i.test(sql)],
-  ['institution deletion is not called from the browser', !/rpc\('delete_institution'/.test(app) && /institutionDeleteUnavailable/.test(app)],
+  ['institution deletion is manager-confirmed through Storage API and private RPC', /functions\.invoke\('delete-institution'/.test(app) && /confirmation_name/.test(app) && /app_private\.delete_institution_impl/.test(institutionPrivateMigration) && /security invoker/.test(institutionPrivateMigration.toLowerCase()) && /Storage API/i.test(institutionStorageMigration) && /set_config\('app\.account_repair', 'on', true\)/.test(institutionGuardMigration)],
+  ['offline attendance is queued in IndexedDB and replayed idempotently', /queueAttendance/.test(app) && /syncQueuedAttendance/.test(app) && /attendance-outbox/.test(read('src/lib/attendance-outbox.ts'))],
+  ['attendance can select an exact coach shift per session and date', /sessionKeyOverride\?: string/.test(read('src/lib/attendance.ts')) && /sessionScope/.test(app) && /loadAttendance\(date, effectiveCoachId, nextSessionKey\)/.test(app)],
+  ['members can leave conversations themselves', /async function leaveConversation/.test(app) && /profile_id', profile.id/.test(between(app, 'async function leaveConversation', 'async function removeMember'))],
+  ['student note follow-up supports open, done and reset', /updateNoteStatus\(item.id, 'open'\)/.test(app) && /updateNoteStatus\(item.id, 'done'\)/.test(app) && /updateNoteStatus\(item.id, 'none'\)/.test(app)],
   ['pending production SQL stays approval-gated', /SECTION 12/.test(read('supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql')) && /requires\s+explicit[\s\S]{0,40}?production\s+approval/i.test(read('supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql'))],
   ['web manifest carries valid Arabic metadata and icons', (() => {
     try {

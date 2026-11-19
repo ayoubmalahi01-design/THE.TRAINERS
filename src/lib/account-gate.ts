@@ -51,3 +51,8 @@ export function gateBodyKey(state: GateState): string {
 export function gateAllowsRetry(state: GateState): boolean {
   return state === 'error'
 }
+
+/** Pending invitations may be re-accepted after an earlier rejection. */
+export function gateCanAcceptInvitation(state: GateState): boolean {
+  return state === 'pending' || state === 'missing' || state === 'rejected'
+}
