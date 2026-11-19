@@ -11,8 +11,7 @@
 - Private media is stored in private buckets; object paths begin with institution UUID / uploader UUID.
 - Invitation uses Supabase Edge Functions. The service-role key must never be shipped to the browser.
 - The invitation/OTP migration (`supabase/INVITATIONS_OTP_INCREMENTAL.sql`) is additive and runs after `THE_TRAINERS_SETUP.sql`. It stores only SHA-256 OTP hashes, keeps `otp_codes` server-only, and grants the OTP RPCs only to `service_role`.
-- WhatsApp/SMS codes are redeemed by the signed-in invitee, never by the inviter. The browser sends only the six-digit code; the invitation is derived from the authenticated email.
-- Email invitations keep the existing Supabase invite/approval flow. Supabase Auth **Confirm email** must remain OFF.
+- The active invitation flow in this release is email-based and uses `accept_email_invitation`; the invitee must have a confirmed Auth email. Supabase Auth **Confirm email must be ON**. WhatsApp/SMS OTP sender functions remain source-only and are not deployed or enabled in the current production invitation UI.
 - Edge Functions use an origin allowlist rather than wildcard CORS. Internal senders require `OTP_DELIVERY_SECRET` and never accept a browser origin.
 
 ## Important deployment caveats

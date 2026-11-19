@@ -1,6 +1,8 @@
+> **Historical snapshot:** This document predates the final repair pass and contains older counts or deployment claims. The authoritative current status is `docs/RELEASE_STATUS_2026-11-19_FINAL_REPAIR.md`.
+
 # Production reconciliation — 2026-11-19
 
-هذا الملف أصبح ملخصًا؛ المرجع الكامل للحالة هو `docs/RELEASE_STATUS_2026-11-19.md`.
+هذا الملف أصبح ملخصًا؛ المرجع الكامل للحالة هو `docs/RELEASE_STATUS_2026-11-19_FINAL_REPAIR.md`.
 
 ## الإصلاحات السابقة
 

@@ -6,7 +6,7 @@ Use separate test identities for each role and at least two institutions. Do not
 - [ ] Invite `ayoubmalleh772@gmail.com` after SQL installation; verify the profile is `owner`, `active`, and has `institution_id IS NULL`.
 - [ ] Sign in as owner; create two institutions and invite one manager to each.
 - [ ] Verify a manager can see only their own institution and cannot create institutions.
-- [ ] Verify a manager can invite coaches and admins, but an admin can invite coaches only.
+- [ ] Verify a manager can invite coaches and admins, and an admin can invite another admin or a coach.
 - [ ] Verify invited accounts remain pending until approved (except owner-appointed managers).
 - [ ] Verify a coach cannot change their own role, institution, or account status through direct Supabase API calls.
 
@@ -18,6 +18,13 @@ Use separate test identities for each role and at least two institutions. Do not
 - [ ] An institution admin can read medical records only for their institution.
 - [ ] Medical detail values are redacted in platform-wide audit snapshots.
 - [ ] A finalized report cannot be updated or deleted through the API.
+
+## Recently repaired workflows
+- [ ] Record attendance in two or more coach shifts on the same date; switch the session selector and verify each session loads/saves independently.
+- [ ] With a disposable test account, save attendance offline, reload the already-cached attendance screen, reconnect, and verify the queued records sync once without duplication.
+- [ ] Leave a group conversation as a member and verify it disappears only from that member’s conversation list.
+- [ ] Change a student note follow-up between open, done, and none using Manager/Admin accounts; verify Coach cannot change the status.
+- [ ] On a disposable test institution only, verify Manager-only institution deletion, exact-name confirmation, Storage API cleanup in all four private buckets, former profiles becoming rejected/detached, and audit history remaining.
 
 ## Workflows and devices
 - [ ] Start and end a coach shift; verify timestamps and one-open-shift constraint.

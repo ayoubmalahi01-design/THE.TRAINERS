@@ -1,3 +1,5 @@
+> **Historical snapshot:** This earlier report predates the final repair pass. Its migration counts, Edge Function deployment state, and test totals are superseded by `RELEASE_STATUS_2026-11-19_FINAL_REPAIR.md`. Use that file as the current release source of truth.
+
 # THE TRAINERS — Release Status (2026-11-19)
 
 ## Verdict
@@ -8,9 +10,9 @@ This package is a reconciled release candidate, **not yet certified for public p
 
 - Project ref: `rxkyryaplszuklagvidi`.
 - Project URL: `https://rxkyryaplszuklagvidi.supabase.co`.
-- Public schema: 27 base tables; RLS enabled on all 27.
+- Public schema: 28 base tables; RLS enabled on all 28; 79 public policies.
 - Storage: four private buckets are present.
-- Local migration directory contains all 21 versions listed in the remote Supabase migration history, with matching version prefixes.
+- Local migration directory contains all 22 versions listed in the remote Supabase migration history, with matching version prefixes.
 - Production currently contains two institutions, two profiles, two students, two attendance records, eight coach shifts, and two reports. Most advanced modules have little or no real usage data; presence of a table is not proof of end-to-end testing.
 
 ## Production migrations applied in this repair session
@@ -59,17 +61,17 @@ Earlier applied migration `20261119105659_reports_draft_permissions_alignment_20
 ## Follow-up repairs in this release candidate
 
 - Student import now recognizes Arabic, French, and English student-code/name headers and combines separate first-name/surname columns. Import preview is a scrollable table and duplicate codes remain skipped. For leading zeroes, the Excel student-code column must be stored as Text before saving; numeric Excel cells do not preserve a display-only zero mask through the current parser.
-- Added a daily status page and dashboard shortcut for all active institution members. It lists non-present attendance statuses for the selected date and active permission/exemption periods. Ended periods are filtered from the active list by date; source records remain untouched.
+- Added a daily status page and daily status page for all active institution members. It lists non-present attendance statuses for the selected date and active permission/exemption periods. Ended periods are filtered from the active list by date; source records remain untouched.
 - The daily status RPC deliberately returns no medical notes, diagnoses, or attachment paths. The medical-record page and its direct table/storage access remain Manager/Admin only.
 - Word template access was aligned so coaches can read only the institution's active template, allowing the existing Word export to use the uploaded template instead of falling back to the built-in document.
 
 ## Verification results
 
-- `node scripts/verify-project.mjs`: 105/105 structural/security assertions passed.
-- Test files executed individually with Node type stripping: 179/179 tests passed (including four new student-import tests).
-- TypeScript/TSX syntax transpilation: 19 source files parsed with 0 syntax diagnostics (declaration files excluded).
-- Migration version comparison: all 21 local migration versions match the remote migration history.
-- Live SQL read-only checks: 27/27 public tables have RLS enabled; medical access policies are Manager/Admin only; owner audit policy is institution-only; message receipts policies and Realtime publication are present.
+- `node scripts/verify-project.mjs`: 117/117 structural/security assertions passed.
+- Test files executed individually with Node type stripping: 185/185 tests passed (including four new student-import tests).
+- TypeScript/TSX syntax transpilation: 20 source files parsed with 0 syntax diagnostics (declaration files excluded).
+- Migration version comparison: all 22 local migration versions match the remote migration history.
+- Live SQL read-only checks: 28/28 public tables have RLS enabled; medical access policies are Manager/Admin only; owner audit policy is institution-only; message receipts policies and Realtime publication are present.
 
 ## Not verified / blockers before public launch
 
@@ -87,3 +89,17 @@ Earlier applied migration `20261119105659_reports_draft_permissions_alignment_20
 - `supabase/manual-applied/legacy/` is historical/manual reference, not an active migration directory.
 - `supabase/pending/` is not approved for execution.
 - Do not send any secret keys through chat.
+
+
+## Final local repair pass (2026-11-19)
+
+- Owner dashboard now reports institution/account metrics only; it does not query or render coach reports.
+- Pending accounts are no longer duplicated in the Owner "All Accounts" section.
+- Invitation acceptance remains available by deep link/banner, not as a permanent active sidebar item.
+- Coach mobile bottom navigation is reduced to five primary destinations; messages remain in the full drawer. Redundant dashboard quick links that duplicated the main navigation were removed.
+- Management reports now use the uploaded Word document as the editing surface. Only marked blank spaces (`________`) or named placeholders (`{input_key}` / `{input_required_key}`) are editable; all other document text is rendered as protected. A filled copy is generated from the unchanged original DOCX. The existing `form_fields` JSON is now internal metadata derived from the DOCX placeholders, not a separately configured coach form.
+- No new Supabase migration was added or applied. The 22 local migration versions exactly match the 22 production migration versions.
+- Live advisor snapshot: 18 authenticated SECURITY DEFINER findings, one RLS-enabled/no-policy finding on `otp_codes` (server-only by design), leaked-password protection disabled; performance advisors report 33 RLS init-plan findings, 12 multiple-permissive-policy findings, two unindexed foreign keys, and 38 unused indexes. These are documented for targeted review; no blanket function revocation or index deletion was performed.
+- The only deployed Edge Function is `invite-user` (active, version 1). Its deployed source is older than the ZIP source and must be redeployed only after the final Cloudflare origin and required Supabase Secrets are confirmed.
+- Local verification after this pass: `scripts/verify-project.mjs` 117/117; Node tests 185/185; TypeScript/TSX syntax transpilation 20 files, zero syntax diagnostics. Full `npm ci`, `npm run build`, semantic typecheck, and `npm audit` remain blocked because dependency installation timed out and the local `node_modules` cache is incomplete. This package is a staging candidate, not yet a certified production build.
+- Cloudflare origin must be confirmed before Edge deployment: conversation history's latest user-supplied URL was `https://salambo0.ayoubmalahi01.workers.dev/owner`, while this ZIP's `wrangler.toml` Worker name is `the-trainers` and the deployed old invitation function redirects to `the-trainers.ayoubmalahi01.workers.dev`. No origin was changed or assumed.

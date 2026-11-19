@@ -376,7 +376,7 @@ The repository's own `docs/STATUS.md` is candid about these, which is a good sig
 - **Privilege escalation is guarded** (`guard_profile_privileges`): self-update cannot change role/institution/status; admin `with check` forbids granting `owner`/`manager`.
 - **`service_role` never reaches the browser.** The invite flow runs server-side, re-verifies the caller's JWT with the anon key, loads the actor's profile with the service client, then enforces role rules:
   - coach → coach only;
-  - admin → coach only (and only if not a manager);
+  - admin → admin/coach within own institution;
   - manager → coach/admin;
   - owner → manager/admin/coach, **must** pass `institution_id`;
   - non-owner → `institution_id` must equal the actor's own.

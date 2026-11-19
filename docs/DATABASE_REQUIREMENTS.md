@@ -4,12 +4,12 @@
 
 ## الحالة الحية
 
-- 27 جدولًا في `public`.
-- RLS مفعّل على 27/27 جدولًا.
+- 28 جدولًا في `public`.
+- RLS مفعّل على 28/28 جدولًا.
 - أربعة Storage Buckets خاصة.
-- سجل Supabase يحتوي على 21 Migration؛ مجلد `supabase/migrations` يحتوي على نفس الإصدارات.
+- سجل Supabase يحتوي على 28 Migration؛ مجلد `supabase/migrations` يحتوي على نفس الإصدارات.
 
-## الجداول الحالية (27)
+## الجداول الحالية (28)
 
 | Table | Purpose |
 |---|---|
@@ -63,4 +63,4 @@
 - `supabase/manual-applied/`: مراجع SQL قديمة أو نُفذت يدويًا؛ لا تُشغّل تلقائيًا.
 - `supabase/pending/`: ملفات غير معتمدة للتنفيذ.
 
-راجع `docs/RELEASE_STATUS_2026-11-19.md` قبل أي تعديل على الإنتاج.
+راجع `docs/RELEASE_STATUS_2026-11-19_FINAL_REPAIR.md` قبل أي تعديل على الإنتاج.

@@ -12,7 +12,7 @@
 
 ## 4.2 Authorization model (from SQL + app)
 - Roles: `owner`, `manager`, `admin`, `coach` (enum `app_role`).
-- Account review: only `owner` and `manager` (via `review_account` RPC). `admin` and `coach` cannot invite/approve/reject. Enforced in `account-policy.ts` (client) AND in the RPC (server).
+- Account review/approval: only `owner` and `manager` (via `review_account` RPC). Invitation creation is separate: Owner invites Manager/Admin/Coach; Manager invites Admin/Coach; Admin invites Admin/Coach; Coach cannot invite. Enforced in `account-policy.ts` (client) AND in the RPC (server).
 - Institution isolation: `current_institution_id()` and `is_active_member()` helpers. All data tables are scoped by `institution_id`.
 - Coach privacy: coaches see only their own reports/notebooks; messages only within conversations they belong to.
 - Self-promotion guard: `guard_profile_privileges` trigger prevents role/institution self-change. Verified in tests (`0003_account_management_repair.sql`).
