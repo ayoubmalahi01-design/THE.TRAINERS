@@ -1,127 +1,91 @@
-# The Trainers — تدرّب
+# THE TRAINERS — تدريب
 
-تطبيق ويب تقدّمي (PWA) مستقل ومصمم للهاتف Android وiPhone لإدارة المؤسسات والمدربين. هذا المشروع منفصل كلياً عن Sport Performance.
+تطبيق مؤسسي متعدد المؤسسات لإدارة التلاميذ والحضور والحصص والتقارير والتعاميم والمحادثات والملفات الإدارية. يعمل كـPWA على الهاتف والحاسوب، ويدعم العربية RTL والفرنسية والإنجليزية.
 
-## التقنية
-- React + TypeScript + Vite
-- Supabase Auth / PostgreSQL / Row Level Security / Realtime / Storage
-- Supabase Edge Function للدعوات الآمنة (من دون وضع `service_role` في المتصفح)
-- Cloudflare Pages
-- العربية والفرنسية والإنجليزية، مع RTL للعربية
+> **مصدر الحقيقة لحالة الإصدار:** `docs/RELEASE_STATUS_2026-11-19.md`. لا تعتمد على تقارير التنفيذ القديمة الموجودة في الأرشيف.
 
-## الأدوار
-1. **مالك المنصة**: البريد `ayoubmalleh772@gmail.com`، حساب مركزي لا ينتمي إلى مؤسسة. ينشئ المؤسسات ويعيّن مديريها.
-2. **مدير المؤسسة (manager)**: يدير فريق المؤسسة ويعيّن الإداريين والمدربين.
-3. **الإدارة (admin)**: تدير التلاميذ والملفات الطبية والتعاميم والتقارير وسجل النشاط.
-4. **المدرب (coach)**: يسجل الحصص والحضور والتقارير ويستعمل كراسه الخاص. لا يقرأ تقارير أو كراسات المدربين الآخرين.
+## التقنيات والبنية
 
-## الإعداد الأول — Supabase
-أنشئ مشروع Supabase جديداً مخصصاً لـ The Trainers. لا تستخدم مشروع Sport Performance.
+- React + TypeScript + Vite.
+- Supabase Auth + PostgreSQL + RLS + Realtime + Storage + Edge Functions.
+- Cloudflare Workers Static Assets / Pages.
+- مشروع Supabase الحالي: `rxkyryaplszuklagvidi` (`https://rxkyryaplszuklagvidi.supabase.co`).
+- كل مؤسسة تعمل داخل نفس المنصة مع عزل البيانات حسب `institution_id`.
 
-1. افتح **SQL Editor** وشغّل الملف `supabase/THE_TRAINERS_SETUP.sql` مرة واحدة على قاعدة فارغة.
-2. من **Authentication → Users** أرسل دعوة إلى `ayoubmalleh772@gmail.com`.
-3. عند إنشاء حساب هذا البريد، ينشئ trigger ملف المالك تلقائياً بدور `owner`.
-4. سجّل الدخول إلى التطبيق بعد نشر الواجهة. من لوحة المالك أنشئ المؤسسة ثم أرسل دعوة إلى مدير المؤسسة.
-5. في الإنتاج، ترحيل قبول الدعوات بالبريد `20261117044121` مطبَّق مسبقاً، ودالة `invite-user` منشورة. لمشروع جديد، شغّل ترحيلات المجلد `supabase/migrations` ثم انشر الدالة كما في الأسفل.
+## الأدوار والصلاحيات الأساسية
 
-> لا تُنشئ صف المالك يدوياً إذا أنشأه trigger. لا تشارك مفتاح `service_role` ولا تضعه في `.env` أو GitHub أو Cloudflare Pages.
+- **Platform Owner:** ينشئ المؤسسات ويدير حسابات المنصة؛ لا يطّلع على تقارير المدربين، ولا على سجلات التدقيق التشغيلية للمؤسسات. يرى أحداث المؤسسات على مستوى المنصة فقط.
+- **Manager:** يدير مؤسسته وفريقها، ويراجع التقارير النهائية، وله صلاحية حذف التقارير النهائية وفق قواعد المشروع.
+- **Admin:** يدير التلاميذ والملفات الطبية والتعاميم والتقارير داخل مؤسسته. يستطيع حذف التقارير التي تمت مراجعتها فقط.
+- **Coach:** يسجل الحضور والحصص ويكتب تقاريره وكراسته الخاصة. لا يقرأ تقارير المدربين الآخرين ولا الملفات الطبية، ولا يحذف إلا مسودته غير المرسلة.
 
-## قاعدة الدعوات وقبولها بالبريد
-بعد `THE_TRAINERS_SETUP.sql` شغّل ملف الترحيل الإضافي مرة واحدة في SQL Editor:
+مصفوفة الدعوات: Owner يدعو Manager/Admin/Coach؛ Manager يدعو Admin/Coach داخل مؤسسته؛ Admin يدعو Coach داخل مؤسسته؛ Coach لا يدعو أحدًا. الدعوات الحالية بالبريد الإلكتروني فقط، والحساب الجديد يبقى Pending حتى المراجعة الإدارية.
 
-```text
-supabase/INVITATIONS_OTP_INCREMENTAL.sql
-```
+## الإعداد المحلي
 
-الملف لا يحذف جداول أو بيانات، ويصلح الجداول التي أنشأها الإصدار المعطوب السابق. راجع `supabase/INVITATIONS_OTP_SUMMARY.md` قبل التشغيل.
-
-قبول الدعوة في الواجهة يعتمد على دالتين منشورتين في الإنتاج:
-`my_pending_invitation()` لقراءة دعوة المستخدم الحالي فقط، و`accept_email_invitation(p_invitation_id uuid)` لقبولها.
-القبول لا يفعّل الحساب؛ يبقى `pending` حتى مراجعة المالك أو مدير المؤسسة.
-
-## نشر Edge Functions
-يلزم Node.js وSupabase CLI. من مجلد المشروع:
+يتطلب Node.js 20 أو أحدث.
 
 ```bash
-npx supabase login
-npx supabase link --project-ref YOUR_SUPABASE_PROJECT_REF
-npx supabase secrets set SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
-npx supabase secrets set APP_URL=https://YOUR_DOMAIN
-npx supabase secrets set ALLOWED_ORIGINS=https://YOUR_DOMAIN
-npx supabase functions deploy invite-user
-```
-
-`SUPABASE_URL` و`SUPABASE_ANON_KEY` متاحان تلقائياً في بيئة Edge Functions. مفتاح `service_role` يبقى كـ Secret داخل Supabase فقط، ولا يوضع في `.env` أو Cloudflare Pages أو GitHub.
-
-الدوال `verify-otp` و`send-whatsapp` و`send-sms` ما زالت موجودة ضمن المشروع لوظائف OTP العامة والاستعادة، لكن واجهة الدعوات لا تستخدمها ولم تعد ترسل رموز دعوة. لا حاجة لإعداد مزوّدي WhatsApp/SMS لنشر الدعوات بالبريد.
-
-في **Authentication → Providers → Email** أبقِ خيار **Confirm email** مغلقاً (OFF). لا تغيّره: التطبيق ينشئ الحسابات عبر الدعوات، وتأكيد البريد قد يمنع الدخول قبل إتمام الإعداد.
-
-### مسار الدعوة
-- كل دعوة تُرسل بالبريد الإلكتروني فقط، من المالك أو المدير أو الإداري حسب المصفوفة.
-- إذا لم يكن للحساب وجود، تُرسل دعوة Supabase القياسية ويُنشأ الحساب بحالة `pending`.
-- إذا كان الحساب موجوداً، لا تُعدَّل بياناته هنا؛ يسجّل الدخول ببريده ويقبل الدعوة من داخل التطبيق.
-- تبقى الدعوة صالحة 7 أيام، وتُمنع الدعوات المعلقة المكررة لنفس البريد والمؤسسة والدور.
-- لا يُنشئ مسار الدعوة أي رمز OTP أو رسالة WhatsApp/SMS، ولا يعيد أي رمز في الاستجابة.
-
-## تشغيل الواجهة محلياً
-المتطلبات: Node.js 20 أو أحدث.
-
-```bash
-npm install
-cp .env.example .env
-```
-
-ضع القيمتين من Supabase → Project Settings → API:
-
-```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
-```
-
-ثم:
-
-```bash
+npm ci
+cp .env.example .env.local
 npm run verify
+npm test
 npm run build
 npm run dev
 ```
 
-## GitHub وCloudflare Pages
-- أنشئ مستودع GitHub جديداً لهذا المشروع فقط وارفع محتويات مجلد المشروع.
-- في Cloudflare Pages اختر **Connect to Git**.
+يحتوي `.env.example` على رابط Supabase والمفتاح العام Publishable Key الخاص بالمشروع الحالي. هذا المفتاح مخصص للمتصفح ومحمي بسياسات RLS؛ **لا تضع مطلقًا `service_role` أو كلمة مرور قاعدة البيانات في أي متغير `VITE_*`.**
+
+## Supabase: مهم قبل أي SQL
+
+- قاعدة الإنتاج الحالية هي `rxkyryaplszuklagvidi`، وليست مشروعًا جديدًا.
+- سجل `supabase/migrations` يحتوي على نسخ SQL مطابقة لإصدارات الترحيلات المسجلة في Supabase. لا تعِد تنفيذ ترحيل موجود في السجل.
+- ملفات `supabase/manual-applied/legacy` توثّق SQL قديمًا نُفّذ يدويًا أو لم يكن ضمن سجل الترحيلات؛ لا تشغّلها على الإنتاج.
+- `supabase/THE_TRAINERS_SETUP.sql` هو Baseline لمشروع Supabase جديد وفارغ فقط. **ممنوع تشغيله على قاعدة الإنتاج الحالية** لأنه يعيد تعريف الجداول والسياسات.
+- `supabase/INVITATIONS_OTP_INCREMENTAL.sql` مخصص لتجهيز مخطط الدعوات/OTP عند إنشاء مشروع جديد بعد الـBaseline. واجهة التطبيق الحالية تستخدم دعوات البريد فقط؛ قنوات SMS/WhatsApp غير مفعّلة في الواجهة.
+- `supabase/pending/` يحتوي ملفات مراجعة لم تُطبّق؛ لا تشغّلها تلقائيًا.
+
+## نشر الواجهة على Cloudflare
+
+إعدادات البناء:
+
 - Build command: `npm run build`
-- Build output directory: `dist`
-- أضف `VITE_SUPABASE_URL` و`VITE_SUPABASE_ANON_KEY` في Environment Variables لبيئتي Production وPreview.
-- لا تضف `SUPABASE_SERVICE_ROLE_KEY` إلى Cloudflare Pages.
-- بعد النشر افتح رابط HTTPS على الهاتف.
+- Output directory: `dist`
+- ملف `wrangler.toml` يضبط اسم Worker على `the-trainers` وملفات Static Assets.
+- أضف إلى Cloudflare Production وPreview:
+  - `VITE_SUPABASE_URL=https://rxkyryaplszuklagvidi.supabase.co`
+  - `VITE_SUPABASE_PUBLISHABLE_KEY` بالقيمة الموجودة في `.env.example` أو من Supabase API settings.
 
-## تثبيت الهاتف
-- Android: افتح الرابط في Chrome ثم Install app / Add to Home screen.
-- iPhone: افتح الرابط في Safari ثم Share → Add to Home Screen.
+لا تضع `SUPABASE_SERVICE_ROLE_KEY` في Cloudflare أو GitHub أو ملفات الواجهة.
 
-## الوحدات الموجودة في المشروع
-- تسجيل الدخول وتوجيه المستخدم بحسب الدور وحالة الحساب.
-- لوحة مالك المنصة وإنشاء المؤسسات وتعيين المديرين.
-- دعوات الفريق الآمنة عبر Edge Function: المالك يدعو مديراً/إدارياً/مدرباً، والمدير يدعو إدارياً/مدرباً في مؤسسته، والإداري يدعو مدرباً في مؤسسته، والمدرب لا يدعو أحداً، ولا يمكن إنشاء مالك عبر الدعوات. كل الدعوات بالبريد الإلكتروني فقط، وتبقى الحسابات بانتظار الموافقة.
-- قائمة التلاميذ والبحث والإضافة والتعديل والأرشفة من حسابات الإدارة، مع استيراد جماعي من Excel عبر النسخ واللصق (TSV/CSV) ومعاينة وتجاهل الأرقام المكررة.
-- تسجيل الحضور والغياب والتأخير والرخص والإعفاءات، مع تحميل السجلات السابقة حسب التاريخ قبل التعديل.
-- بداية الحصة ونهايتها، وتقرير يومي تُملأ أعداده تلقائياً من حضور اليوم، ثم يمكن للإدارة اعتماده بعد المراجعة.
-- كراس خاص بكل مدرب مع عزل على مستوى RLS.
-- التعاميم الإدارية.
-- محادثات خاصة بين مدربين ومجموعات حسب المشاركين، مع تحديث فوري للرسائل وإرسال الملفات والصور والتسجيلات الصوتية داخل المحادثة فقط. دعوات الفريق تتم من شاشة الفريق حسب المصفوفة، ثم يفعّل المدير الحساب.
-- إدارة السجلات الطبية للإدارة فقط.
-- سجل تدقيق للتغييرات.
-- العربية والفرنسية والإنجليزية وPWA قابلة للتثبيت.
+## نشر دعوات البريد (Edge Function)
 
-## التحقق وحدود ما يجب اختباره
-`npm run verify` يفحص وجود الملفات وبعض ضوابط البنية والأمان بشكل ثابت، بما فيها الاستيراد الجماعي والمحادثات المقيدة بالأعضاء ومراجعة التقارير. لا يُعد اختبار تكامل مع قاعدة بيانات فعلية. يجب قبل الاستخدام الحقيقي اختبار الحسابات المنفصلة (مالك/مدير/إداري/مدرب)، وعزل مؤسستين، ومنع المدرب من قراءة تقارير زملائه، وسيناريوهات الدعوات والحضور والتقارير والوسائط على Android وiPhone. لا توجد في هذه النسخة خدمة Push Notifications فعلية، ولا Speech-to-Text مدمج؛ تسجيل الصوت كمرفق وإملاء صوتي عبر Web Speech API متاحان في المتصفحات التي تدعمهما؛ التوفر واللغة يختلفان حسب المتصفح والجهاز. إشعارات Push الفعلية غير مفعّلة حالياً، وإشعارات iOS على الويب لها قيود دعم تختلف حسب إصدار النظام وطريقة تثبيت PWA.
+مصدر `supabase/functions/invite-user` هو النسخة المعتمدة في المشروع، لكن النسخة المنشورة حاليًا على Supabase أقدم من المصدر. قبل نشرها يجب ضبط Secrets في Supabase:
 
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `APP_URL` = عنوان HTTPS النهائي للتطبيق على Cloudflare
+- `ALLOWED_ORIGINS` = نفس أصل الموقع، ويمكن إضافة أصول Preview المسموح بها بفواصل
 
-## ملفات إضافية
-- `docs/STATUS.md`: ما أُنجز وما بقي وما لم يُجرَّب.
-- `docs/DATABASE.md`, `docs/STORAGE.md`: توثيق قاعدة البيانات والتخزين.
-- `docs/ACCEPTANCE_TESTS.md`, `docs/SECURITY_NOTES.md`: الاختبارات اليدوية والأمان.
-- `docs/COACH_GUIDE.md`, `docs/ADMIN_GUIDE.md`: أدلة الاستعمال.
+ثم:
 
-> اسم متغير المفتاح العام في Vite: `VITE_SUPABASE_ANON_KEY` (يقبل التطبيق أيضاً `VITE_SUPABASE_PUBLISHABLE_KEY`).
+```bash
+npx supabase login
+npx supabase link --project-ref rxkyryaplszuklagvidi
+npx supabase functions deploy invite-user
+```
+
+لا ترسل مفاتيح الأسرار إلى المحادثة. لا تنشر الدالة قبل معرفة عنوان Cloudflare النهائي وضبط Secrets. الدالة ترفض العمل إذا لم يكن `APP_URL` مضبوطًا، ولا تستخدم localhost كتحويل إنتاجي.
+
+## الإشعارات
+
+الإشعارات داخل التطبيق وتحديثات Realtime وإشعارات المتصفح أثناء بقاء التطبيق مفتوحًا أو في الخلفية مدعومة. خدمة Web Push التي توصل الإشعار بعد إغلاق التطبيق غير مفعّلة في هذا الإصدار؛ لا توجد VAPID sender function منشورة.
+
+## ما الذي يجب اختباره قبل الإطلاق العام؟
+
+1. `npm ci` ثم `npm run build` و`npm run typecheck` على بيئة فيها اتصال npm.
+2. نشر `invite-user` بعد إعداد Secrets واختبار إرسال وقبول دعوة بريد حقيقية.
+3. اختبار RLS بحساب Owner وManager وAdmin وCoach، مع مؤسستين مختلفتين، خصوصًا التقارير والملفات الطبية والكراسات والمحادثات.
+4. اختبار PWA وتسجيل الحضور والتقارير ورفع الملفات على Android وiPhone والحاسوب.
+5. اختبار Realtime وإيصالات قراءة الرسائل وقوائم قارئي التعاميم وغير القارئين بحسابات حقيقية.
+
+انظر `docs/RELEASE_STATUS_2026-11-19.md` للتفاصيل الدقيقة لما تم التحقق منه وما لم يتم.
