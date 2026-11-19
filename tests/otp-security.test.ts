@@ -23,6 +23,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8')
 
 const migration = read('supabase/INVITATIONS_OTP_INCREMENTAL.sql')
+const emailActivationMigration = read('supabase/migrations/20261119210841_invitation_acceptance_activates_without_admin_approval.sql')
 const app = read('src/App.tsx')
 const invite = read('supabase/functions/invite-user/index.ts')
 const verify = read('supabase/functions/verify-otp/index.ts')
@@ -238,6 +239,15 @@ test('OTP acceptance does not auto-activate a new account', () => {
   assert.match(body, /ELSE 'pending'/)
   assert.doesNotMatch(body, /approved_by = COALESCE\(v_inviter_id/)
   assert.doesNotMatch(migration, /invitation_accepted[\s\S]{0,400}account_status', 'active'/)
+})
+
+test('email invitation acceptance activates only the authenticated matching recipient', () => {
+  assert.match(emailActivationMigration, /auth\.uid\(\)/)
+  assert.match(emailActivationMigration, /lower\(coalesce\(v_inv\.invited_email, ''\)\) <> v_auth_email/i)
+  assert.match(emailActivationMigration, /email_confirmed_at\s+IS\s+NULL/i)
+  assert.match(emailActivationMigration, /account_status\s*=\s*'active'/i)
+  assert.match(emailActivationMigration, /status\s*=\s*'accepted'/i)
+  assert.match(emailActivationMigration, /approval_required',\s*false/i)
 })
 
 test('public configuration example targets the intended Supabase project without secrets', () => {

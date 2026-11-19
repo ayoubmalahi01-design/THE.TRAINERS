@@ -48,11 +48,15 @@ export async function loadAttendance(
 ): Promise<{ records: AttendanceRecord[]; error: string | null; sessionKey: string }> {
   const sessionKey = sessionKeyOverride ?? (await resolveSessionKey(coachId))
   const base = () =>
-    supabase.from('attendance_records').select('student_id,status,reason').eq('session_date', date)
+    supabase.from('attendance_records').select('student_id,status,reason,start_at,end_at,notified_at,actual_return_at,duty_completed_at').eq('session_date', date)
 
   const res = await base().eq('session_key', sessionKey)
+  if (res.error && /start_at|end_at|notified_at|actual_return_at|duty_completed_at/i.test(res.error.message || '')) {
+    const oldShape = await supabase.from('attendance_records').select('student_id,status,reason').eq('session_date', date).eq('session_key', sessionKey)
+    if (!oldShape.error) return { records: (oldShape.data ?? []) as AttendanceRecord[], error: null, sessionKey }
+  }
   if (res.error && isMissingSessionColumn(res.error)) {
-    const legacy = await base()
+    const legacy = await supabase.from('attendance_records').select('student_id,status,reason').eq('session_date', date)
     return {
       records: (legacy.data ?? []) as AttendanceRecord[],
       error: legacy.error ? friendlyAttendanceError(legacy.error) : null,

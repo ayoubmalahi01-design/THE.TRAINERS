@@ -575,3 +575,19 @@ tr:last-child td{border-bottom:0}
 }
 
 .word-document-preview .word-header, .word-document-preview .word-footer { border-inline-start: 3px solid #d5deea; padding-inline-start: 10px; margin: 8px 0; color: #4b5563; }
+
+/* Home portal shortcuts and clear selected-file feedback. */
+.quick-links{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;margin:0 0 18px}
+.quick-link{display:flex;align-items:center;justify-content:flex-start;gap:10px;min-height:48px;padding:12px 14px;border:1px solid var(--line,#e5e7eb);border-radius:13px;background:var(--surface,#fff);color:var(--text,#1f2937);font:inherit;font-weight:650;text-align:start;cursor:pointer}
+.quick-link:hover{border-color:var(--accent,#b8d95a);background:var(--surface-soft,#f7faef)}
+.selected-upload-file{display:grid;gap:4px;margin-top:8px;overflow-wrap:anywhere}
+.selected-upload-file small{color:var(--muted,#68756c)}
+@media(max-width:680px){.quick-links{grid-template-columns:repeat(2,minmax(0,1fr))}.quick-link{min-height:46px;padding:10px;font-size:12px}}
+
+.attendance-time-details{flex:1 1 100%;margin:2px 0 6px 42px;font-size:12px;color:var(--muted,#68756c)}
+.attendance-time-details summary{cursor:pointer;padding:5px 0;font-weight:650}
+.attendance-time-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px;padding:8px 0}
+.attendance-time-grid label{display:grid;gap:4px;font-size:11px}
+.attendance-time-grid input{min-width:0;width:100%;border:1px solid var(--line,#e5e7eb);border-radius:8px;padding:7px;background:var(--surface,#fff);color:inherit}
+
+.record-timeline{display:block;line-height:1.8;margin-top:6px;white-space:normal}

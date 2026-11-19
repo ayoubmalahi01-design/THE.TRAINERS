@@ -5,7 +5,7 @@
 export const NO_SESSION = 'unspecified'
 
 export type AttendanceStatus =
-  | 'present' | 'absent' | 'late' | 'excused' | 'permission' | 'medical_exemption'
+  | 'present' | 'absent' | 'late' | 'excused' | 'permission' | 'medical_exemption' | 'duty'
 
 export type AttendanceInput = {
   // Nullable: the platform owner has no institution, and RLS (not the client)
@@ -16,9 +16,14 @@ export type AttendanceInput = {
   session_date: string
   status: string
   reason?: string | null
+  start_at?: string | null
+  end_at?: string | null
+  notified_at?: string | null
+  actual_return_at?: string | null
+  duty_completed_at?: string | null
 }
 
-export type AttendanceRecord = { student_id: string; status: string; reason?: string | null }
+export type AttendanceRecord = { student_id: string; status: string; reason?: string | null; start_at?: string | null; end_at?: string | null; notified_at?: string | null; actual_return_at?: string | null; duty_completed_at?: string | null }
 
 export type PgError = { code?: string; message?: string; details?: string } | null
 

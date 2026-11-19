@@ -157,6 +157,11 @@ type MedicalRecord = {
   details: string
   start_date?: string | null
   end_date?: string | null
+  start_at?: string | null
+  end_at?: string | null
+  notified_at?: string | null
+  actual_return_at?: string | null
+  duty_completed_at?: string | null
   attachment_path?: string | null
   attachment_url?: string
   created_at: string
@@ -311,8 +316,8 @@ export default function App() {
     /**
      * Supabase can return an email link in several shapes. The client already
      * handles implicit hash links; PKCE `?code=` and `?token_hash=&type=`
-     * links are completed here. Acceptance never activates the account: it
-     * only authenticates the person so they can accept in the app.
+     * links are completed here. The invitation link authenticates the
+     * recipient; accepting that invitation activates the account immediately.
      */
     async function handleEmailLink(): Promise<boolean> {
       const search = new URLSearchParams(window.location.search)
@@ -1011,8 +1016,8 @@ function invitationAcceptError(raw: string, t: T): string {
 /**
  * The invitee accepts the live invitation that belongs to their own signed-in
  * email. `my_pending_invitation()` can only return the caller's row and
- * `accept_email_invitation()` performs every server-side check. Accepting
- * never activates the account: it stays pending until Owner/Manager review.
+ * `accept_email_invitation()` performs every server-side check. A valid
+ * invitation acceptance activates the account without a second admin review.
  */
 function EmailInvitationPanel({ t, onAccepted }: { t: T; onAccepted: () => void }) {
   const [invitation, setInvitation] = useState<PendingInvitation | null>(null)
@@ -1060,7 +1065,7 @@ function EmailInvitationPanel({ t, onAccepted }: { t: T; onAccepted: () => void 
         <span className="invite-state-icon"><Check size={22} /></span>
         <div>
           <b>{t('invitationAcceptedOk')}</b>
-          <p className="muted">{t('awaitingApproval')}</p>
+          <p className="muted">{t('invitationNoActivation')}</p>
         </div>
       </div>
     )
@@ -1214,6 +1219,7 @@ function NotFound({ t }: { t: T }) {
   )
 }
 function Dashboard({ profile, t }: { profile: Profile; t: T }) {
+  const navigate = useNavigate()
   const [stats, setStats] = useState({ students: 0, reports: 0, notices: 0, team: 0 })
   const [recent, setRecent] = useState<ReportRow[]>([])
   const [errorKey, setErrorKey] = useState('')
@@ -1290,6 +1296,14 @@ function Dashboard({ profile, t }: { profile: Profile; t: T }) {
       </section>
       {profile.role !== 'owner' && <PendingInvitationNotice t={t} />}
       {errorKey && <div className="error-box">{t(errorKey)}</div>}
+      {profile.role !== 'owner' && <section className="quick-links" aria-label={t('home')}>
+        <button className="quick-link" onClick={() => navigate('/attendance')}><CalendarDays size={18}/><span>{t('attendance')}</span></button>
+        <button className="quick-link" onClick={() => navigate('/daily-status')}><Activity size={18}/><span>{t('dailyStatus')}</span></button>
+        <button className="quick-link" onClick={() => navigate('/reports')}><ClipboardList size={18}/><span>{t('reports')}</span></button>
+        <button className="quick-link" onClick={() => navigate('/students')}><Users size={18}/><span>{t('students')}</span></button>
+        <button className="quick-link" onClick={() => navigate('/management-reports')}><FileText size={18}/><span>{t('managementReports')}</span></button>
+        <button className="quick-link" onClick={() => navigate('/notices')}><Bell size={18}/><span>{t('notices')}</span></button>
+      </section>}
       <div className="stats-grid">
         {profile.role === 'owner' ? <>
           <Stat icon={Building2} label={t('statsInstitutions')} value={stats.students} />
@@ -1675,8 +1689,8 @@ function Students({ profile, t }: { profile: Profile; t: T }) {
         <Modal title={t('importTitle')} close={() => setBulkOpen(false)} closeLabel={t('close')}>
           <p className="muted">{t('importHint')}</p>
           <label>{t('importExcel')}
-            <input type="file" accept=".xlsx,.csv,.txt,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              onChange={(e) => { void readImportFile(e.target.files?.[0] ?? null); e.target.value = '' }} />
+            <input type="file" accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain,application/octet-stream,*/*"
+              onChange={(e) => { const selected = e.currentTarget.files?.[0] ?? null; void readImportFile(selected); e.currentTarget.value = '' }} />
           </label>
           {bulkFileName && <div className="notice-box"><b>{bulkFileName}</b><div>{bulkReadStatus || t('readingImportFile')}</div></div>}
           <label>{t('importPreview')}
@@ -1750,6 +1764,7 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
   const [students, setStudents] = useState<Student[]>([])
   const [status, setStatus] = useState<Record<string, string>>({})
   const [reasons, setReasons] = useState<Record<string, string>>({})
+  const [timings, setTimings] = useState<Record<string, { start_at: string; end_at: string; notified_at: string; actual_return_at: string; duty_completed_at: string }>>({})
   const [date, setDate] = useState(localDate())
   const [busy, setBusy] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -1758,6 +1773,14 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
   const [coaches, setCoaches] = useState<{ id: string; full_name: string; role: string }[]>([])
   const [sessionOptions, setSessionOptions] = useState<{ id: string; started_at: string; ended_at: string | null }[]>([])
   const [queuedCount, setQueuedCount] = useState(0)
+
+  function toDateTimeInput(value?: string | null) {
+    if (!value) return ''
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return ''
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  }
 
   async function refreshQueueCount() {
     if (!profile.institution_id) return setQueuedCount(0)
@@ -1832,24 +1855,25 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
     const offlineKey = `${profile.institution_id || 'none'}:${effectiveCoachId}:${date}:${resolvedSession}`
     let next: Record<string, string> = {}
     let why: Record<string, string> = {}
+    let nextTimings: typeof timings = {}
     if (!navigator.onLine && profile.institution_id) {
       const cached = readAttendanceSnapshot(offlineKey)
       if (cached) { next = cached.status; why = cached.reasons }
-      else {
-        try {
-          const queued = await getQueuedAttendance(`${profile.institution_id}:${effectiveCoachId}:${date}:${resolvedSession}`)
-          for (const row of queued?.rows ?? []) { next[row.student_id] = row.status; why[row.student_id] = row.reason || '' }
-        } catch { /* queued rows remain stored; do not discard offline data */ }
-      }
+      try {
+        const queued = await getQueuedAttendance(`${profile.institution_id}:${effectiveCoachId}:${date}:${resolvedSession}`)
+        for (const row of queued?.rows ?? []) { next[row.student_id] = row.status; why[row.student_id] = row.reason || ''; nextTimings[row.student_id] = { start_at: toDateTimeInput(row.start_at), end_at: toDateTimeInput(row.end_at), notified_at: toDateTimeInput(row.notified_at), actual_return_at: toDateTimeInput(row.actual_return_at), duty_completed_at: toDateTimeInput(row.duty_completed_at) } }
+      } catch { /* queued rows remain stored; do not discard offline data */ }
     } else {
       for (const record of attendance.records) {
         next[record.student_id] = record.status
         why[record.student_id] = record.reason || ''
+        nextTimings[record.student_id] = { start_at: toDateTimeInput(record.start_at), end_at: toDateTimeInput(record.end_at), notified_at: toDateTimeInput(record.notified_at), actual_return_at: toDateTimeInput(record.actual_return_at), duty_completed_at: toDateTimeInput(record.duty_completed_at) }
       }
       cacheAttendanceSnapshot(offlineKey, next, why)
     }
     setStatus(next)
     setReasons(why)
+    setTimings(nextTimings)
     setSessionKey(resolvedSession)
     setLoading(false)
   }
@@ -1871,25 +1895,36 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
     if (result.error) { notify(result.error); return }
     const next: Record<string, string> = {}
     const why: Record<string, string> = {}
-    for (const record of result.records) { next[record.student_id] = record.status; why[record.student_id] = record.reason || '' }
+    const nextTimings: typeof timings = {}
+    for (const record of result.records) { next[record.student_id] = record.status; why[record.student_id] = record.reason || ''; nextTimings[record.student_id] = { start_at: toDateTimeInput(record.start_at), end_at: toDateTimeInput(record.end_at), notified_at: toDateTimeInput(record.notified_at), actual_return_at: toDateTimeInput(record.actual_return_at), duty_completed_at: toDateTimeInput(record.duty_completed_at) } }
     setStatus(next)
     setReasons(why)
+    setTimings(nextTimings)
     cacheAttendanceSnapshot(offlineKey, next, why)
   }
 
   function mark(id: string, value: string) {
     setStatus((current) => ({ ...current, [id]: value }))
+    if (value) setTimings(current => current[id]?.start_at ? current : ({ ...current, [id]: { start_at: toDateTimeInput(new Date().toISOString()), end_at: '', notified_at: '', actual_return_at: '', duty_completed_at: '' } }))
+  }
+
+  function updateTiming(id: string, key: keyof (typeof timings)[string], value: string) {
+    setTimings(current => ({ ...current, [id]: { start_at: '', end_at: '', notified_at: '', actual_return_at: '', duty_completed_at: '', ...(current[id] || {}), [key]: value } }))
   }
 
   function markAllPresent() {
     const next: Record<string, string> = {}
-    for (const student of students) next[student.id] = 'present'
+    const now = toDateTimeInput(new Date().toISOString())
+    const nextTimes: typeof timings = {}
+    for (const student of students) { next[student.id] = 'present'; nextTimes[student.id] = { start_at: now, end_at: '', notified_at: '', actual_return_at: '', duty_completed_at: '' } }
     setStatus(next)
+    setTimings(nextTimes)
   }
 
   function clearAll() {
     setStatus({})
     setReasons({})
+    setTimings({})
   }
 
   async function save() {
@@ -1903,7 +1938,7 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
       institution_id: profile.institution_id,
       coach_id: effectiveCoachId,
       session_date: date,
-    })
+    }).map(row => ({ ...row, ...(timings[row.student_id] ? Object.fromEntries(Object.entries(timings[row.student_id]).map(([key, value]) => [key, value ? new Date(value).toISOString() : null])) : {}) }))
     if (!rows.length) { notify(t('nothingRecorded')); return }
     // Only a coach owns a shift. Managers/admins record attendance directly and
     // have no shift to start, so the coach-only prompt would be misleading.
@@ -1959,6 +1994,7 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
     ['excused', t('excused')],
     ['permission', t('permission')],
     ['medical_exemption', t('medicalExemption')],
+    ['duty', t('duty')],
   ]
 
   return (
@@ -2010,12 +2046,22 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
                   <option value="excused">{t('excused')}</option>
                   <option value="permission">{t('permission')}</option>
                   <option value="medical_exemption">{t('medicalExemption')}</option>
+                  <option value="duty">{t('duty')}</option>
                 </select>
                 {status[student.id] && status[student.id] !== 'present' && (
                   <input className="attendance-reason" value={reasons[student.id] || ''}
                     onChange={(e) => setReasons((current) => ({ ...current, [student.id]: e.target.value }))}
                     placeholder={t('reason')} />
                 )}
+                {status[student.id] && <details className="attendance-time-details"><summary>{t('recordTimes')}</summary>
+                  <div className="attendance-time-grid">
+                    <label>{t('recordStart')}<input type="datetime-local" value={timings[student.id]?.start_at || ''} onChange={e => updateTiming(student.id,'start_at',e.target.value)} /></label>
+                    <label>{t('recordEnd')}<input type="datetime-local" value={timings[student.id]?.end_at || ''} onChange={e => updateTiming(student.id,'end_at',e.target.value)} /></label>
+                    {status[student.id] !== 'present' && <label>{t('recordNotified')}<input type="datetime-local" value={timings[student.id]?.notified_at || ''} onChange={e => updateTiming(student.id,'notified_at',e.target.value)} /></label>}
+                    {['absent','permission','excused','medical_exemption'].includes(status[student.id]) && <label>{t('recordReturn')}<input type="datetime-local" value={timings[student.id]?.actual_return_at || ''} onChange={e => updateTiming(student.id,'actual_return_at',e.target.value)} /></label>}
+                    {status[student.id] === 'duty' && <label>{t('dutyCompleted')}<input type="datetime-local" value={timings[student.id]?.duty_completed_at || ''} onChange={e => updateTiming(student.id,'duty_completed_at',e.target.value)} /></label>}
+                  </div>
+                </details>}
               </div>
             ))}
           </div>
@@ -2081,7 +2127,7 @@ function Reports({ profile, t }: { profile: Profile; t: T }) {
       absent_count: rows.filter((x) => x.status === 'absent').length,
       late_count: rows.filter((x) => x.status === 'late').length,
       injured_count: rows.filter((x) => x.status === 'medical_exemption').length,
-      excused_count: rows.filter((x) => ['excused', 'permission'].includes(x.status)).length,
+      excused_count: rows.filter((x) => ['excused', 'permission', 'duty'].includes(x.status)).length,
     }
   }
 
@@ -4153,6 +4199,10 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
   const [details, setDetails] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
+  const [startTime, setStartTime] = useState('')
+  const [endTime, setEndTime] = useState('')
+  const [notifiedAt, setNotifiedAt] = useState('')
+  const [actualReturnAt, setActualReturnAt] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -4206,6 +4256,10 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
       details: details.trim(),
       start_date: startDate || null,
       end_date: endDate || null,
+      start_at: startTime ? new Date(startTime).toISOString() : null,
+      end_at: endTime ? new Date(endTime).toISOString() : null,
+      notified_at: notifiedAt ? new Date(notifiedAt).toISOString() : null,
+      actual_return_at: actualReturnAt ? new Date(actualReturnAt).toISOString() : null,
       created_by: profile.id,
       attachment_path,
     })
@@ -4216,6 +4270,10 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
     setDetails('')
     setStartDate('')
     setEndDate('')
+    setStartTime('')
+    setEndTime('')
+    setNotifiedAt('')
+    setActualReturnAt('')
     setFile(null)
     await load()
   }
@@ -4244,6 +4302,10 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
           </label>
           <label>{t('fromDate')}<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>
           <label>{t('toDate')}<input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} /></label>
+          <label>{t('recordStart')}<input type="datetime-local" value={startTime} onChange={e => setStartTime(e.target.value)} /></label>
+          <label>{t('recordEnd')}<input type="datetime-local" value={endTime} onChange={e => setEndTime(e.target.value)} /></label>
+          <label>{t('recordNotified')}<input type="datetime-local" value={notifiedAt} onChange={e => setNotifiedAt(e.target.value)} /></label>
+          <label>{t('recordReturn')}<input type="datetime-local" value={actualReturnAt} onChange={e => setActualReturnAt(e.target.value)} /></label>
           <label>{t('medicalFile')}
             <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(e) => { setFile(e.target.files?.[0] ?? null); e.target.value = '' }} />
           </label>
@@ -4262,6 +4324,7 @@ function Medical({ profile, t }: { profile: Profile; t: T }) {
             {(record.start_date || record.end_date) && (
               <small>{record.start_date || '—'} → {record.end_date || '—'}</small>
             )}
+            {(record.start_at || record.end_at || record.notified_at || record.actual_return_at) && <small className="record-timeline">{[record.start_at && `${t('recordStart')}: ${formatDateTime(record.start_at)}`, record.end_at && `${t('recordEnd')}: ${formatDateTime(record.end_at)}`, record.notified_at && `${t('recordNotified')}: ${formatDateTime(record.notified_at)}`, record.actual_return_at && `${t('recordReturn')}: ${formatDateTime(record.actual_return_at)}`].filter(Boolean).join(' · ')}</small>}
             {record.attachment_url && (
               <a href={record.attachment_url} target="_blank" rel="noreferrer">{t('openAttachment')}</a>
             )}
@@ -4367,7 +4430,7 @@ function ClassManagement({ profile, t }: { profile: Profile; t: T }) {
 }
 
 function DailyStatus({ profile, t }: { profile: Profile; t: T }) {
-  type AttendanceStatusRow = { id: string; student_id: string; status: string; session_date: string }
+  type AttendanceStatusRow = { id: string; student_id: string; status: string; session_date: string; start_at?: string | null; end_at?: string | null; notified_at?: string | null; actual_return_at?: string | null; duty_completed_at?: string | null }
   type RestrictionRow = { student_id: string; student_code: string; full_name: string; record_type: string; start_date: string | null; end_date: string | null }
   const [date, setDate] = useState(localDate())
   const [attendanceRows, setAttendanceRows] = useState<AttendanceStatusRow[]>([])
@@ -4380,7 +4443,7 @@ function DailyStatus({ profile, t }: { profile: Profile; t: T }) {
     if (!isConfigured || !profile.institution_id || profile.role === 'owner') { setLoading(false); return }
     const [studentsRes, attendanceRes, restrictionRes] = await Promise.all([
       supabase.from('students').select('id,student_code,full_name').eq('institution_id', profile.institution_id),
-      supabase.from('attendance_records').select('id,student_id,status,session_date')
+      supabase.from('attendance_records').select('id,student_id,status,session_date,start_at,end_at,notified_at,actual_return_at,duty_completed_at')
         .eq('institution_id', profile.institution_id).eq('session_date', date)
         .neq('status', 'present').order('status'),
       supabase.rpc('get_active_student_restrictions', { p_on_date: date }),
@@ -4421,7 +4484,7 @@ function DailyStatus({ profile, t }: { profile: Profile; t: T }) {
               const student = roster[row.student_id]
               return <div className="report-row" key={row.id}>
                 <div className="report-icon"><Activity size={17} /></div>
-                <div className="grow"><b>{student ? `${student.student_code} · ${student.full_name}` : t('students')}</b><small>{row.session_date}</small></div>
+                <div className="grow"><b>{student ? `${student.student_code} · ${student.full_name}` : t('students')}</b><small>{row.session_date}{row.start_at ? ` · ${t('recordStart')}: ${formatDateTime(row.start_at)}` : ''}{row.end_at ? ` · ${t('recordEnd')}: ${formatDateTime(row.end_at)}` : ''}{row.notified_at ? ` · ${t('recordNotified')}: ${formatDateTime(row.notified_at)}` : ''}{row.actual_return_at ? ` · ${t('recordReturn')}: ${formatDateTime(row.actual_return_at)}` : ''}{row.duty_completed_at ? ` · ${t('dutyCompleted')}: ${formatDateTime(row.duty_completed_at)}` : ''}</small></div>
                 <span className={`pill ${row.status === 'absent' ? 'warning' : 'success'}`}>{statusLabel(row.status)}</span>
               </div>
             })}
@@ -5288,7 +5351,7 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
     let safeFileName = ''
     if (file) {
       const ext = (file.name.split('.').pop() || '').toLowerCase()
-      if (ext !== 'docx') { notify(t('invalidImage')); setBusy(false); return }
+      if (ext !== 'docx') { notify(t('selectDocx')); setBusy(false); return }
       if (file.size > 10 * 1024 * 1024) { notify(t('fileTooLarge')); setBusy(false); return }
       safeFileName = file.name.replace(/[\\/\0-\x1f]/g, '_').replace(/\.\.+/g, '.')
       try {
@@ -5327,7 +5390,10 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
         form_fields: detectedFields || [],
         is_archived: false,
       }).select('id').single()
-      if (error) { setBusy(false); notify(error.message); return }
+      if (error) {
+        if (filePath) { try { await supabase.storage.from('trainer-report-templates').remove([filePath]) } catch { /* best-effort cleanup */ } }
+        setBusy(false); notify(error.message); return
+      }
       const newId = (data as { id?: string } | null)?.id
       const cleared = await supabase.from('report_templates')
         .update({ is_current: false })
@@ -5478,7 +5544,9 @@ function ReportTemplates({ profile, t }: { profile: Profile; t: T }) {
             </div>
             {!editing && (
               <label>{t('selectDocx')}
-                <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                <input type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/octet-stream,*/*" onChange={e => { const selected = e.currentTarget.files?.[0] ?? null; setFile(selected); e.currentTarget.value = '' }} />
+                {file && <div className="notice-box selected-upload-file"><b>{file.name}</b><small>{(file.size / 1024).toFixed(1)} KB · DOCX</small></div>}
+                {!file && <small className="muted">{t('selectDocx')}</small>}
               </label>
             )}
             <div className="modal-actions">

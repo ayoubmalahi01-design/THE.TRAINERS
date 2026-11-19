@@ -20,6 +20,8 @@ const required = [
   'supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql',
   'supabase/migrations/20261119132835_coach_management_report_forms.sql',
   'supabase/migrations/20261119155330_allow_reinvitation_after_rejection.sql',
+  'supabase/migrations/20261119210841_invitation_acceptance_activates_without_admin_approval.sql',
+  'supabase/migrations/20261119223000_attendance_timing_and_audit_history.sql',
   'src/lib/report-template.ts',
   'src/lib/report-template-render.ts',
   'src/lib/word-template-editor.ts',
@@ -176,8 +178,8 @@ const checks = [
   ['pending gate accepts the caller’s live email invitation', /my_pending_invitation/.test(repair) && /my_pending_invitation/.test(app) && /accept_email_invitation/.test(app)],
   ['re-invitation after rejection is supported by the additive SQL migration', /NOT IN \('pending', 'rejected'\)/.test(reinviteSQL) && /account_status::text = 'suspended'/.test(reinviteSQL)],
   ['rejected account gate permits accepting a new invitation', /gateCanAcceptInvitation/.test(app) && /state === 'rejected'/.test(read("src/lib/account-gate.ts"))],
-  ['service worker cache version updated for invitation policy release', /the-trainers-shell-v4/.test(read('public/sw.js'))],
-  ['invitation acceptance never activates the account', /awaitingApproval/.test(app) && /invitationNoActivation/.test(app)],
+  ['service worker cache version updated for invitation policy release', /the-trainers-shell-v5/.test(read('public/sw.js'))],
+  ['email invitation acceptance activates account without admin approval', /accept_email_invitation/.test(read('supabase/migrations/20261119210841_invitation_acceptance_activates_without_admin_approval.sql')) && /account_status = 'active'/.test(read('supabase/migrations/20261119210841_invitation_acceptance_activates_without_admin_approval.sql')) && /invitationNoActivation/.test(app)],
   ['edge-unreachable errors are mapped', /FunctionsFetchError/.test(app) && /edge_unreachable/.test(app)],
 
   // ------------------------------------------------------- migration integrity

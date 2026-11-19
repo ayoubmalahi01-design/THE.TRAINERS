@@ -26,6 +26,7 @@ const repair = read('supabase/manual-applied/legacy/0003_account_management_repa
 const app = read('src/App.tsx')
 const inviteFunction = read('supabase/functions/invite-user/index.ts')
 const reinviteMigration = read('supabase/migrations/20261119155330_allow_reinvitation_after_rejection.sql')
+const emailActivationMigration = read('supabase/migrations/20261119210841_invitation_acceptance_activates_without_admin_approval.sql')
 
 /** Return the smallest block starting at `start` and ending at the first `end`. */
 function block(source: string, start: string, end: string): string {
@@ -63,11 +64,12 @@ test('Coach has no invitation path in the Edge Function', () => {
   assert.match(inviteFunction, /INVITE_MATRIX\[actor\.role\]\.includes\(role\)/)
 })
 
-test('email invitations always stay pending until a human review', () => {
-  assert.match(inviteFunction, /account_status:\s*'pending'/)
-  assert.doesNotMatch(inviteFunction, /autoActive/)
-  assert.doesNotMatch(inviteFunction, /account_status:\s*autoActive\s*\?/)
-  assert.doesNotMatch(inviteFunction, /approved_by:\s*autoActive/)
+test('email invitation acceptance activates the invitee without admin approval', () => {
+  assert.match(inviteFunction, /status:\s*'pending'/)
+  assert.match(emailActivationMigration, /account_status\s*=\s*'active'/i)
+  assert.match(emailActivationMigration, /'approval_required',\s*false/i)
+  assert.match(emailActivationMigration, /email_confirmed_at\s+IS\s+NULL/i)
+  assert.match(emailActivationMigration, /accepted_by\s*=\s*v_uid/i)
 })
 
 test('the Edge Function creates a pending email invitation and never mutates an existing profile', () => {
@@ -304,9 +306,10 @@ test('the owner-only review path cannot be reached by a manager through the poli
 })
 
 
-test('a rejected profile can accept a new pending invitation without auto-activation', () => {
+test('a rejected profile can accept a new invitation and become active without admin review', () => {
   assert.match(reinviteMigration, /account_status::text = 'suspended'/)
   assert.match(reinviteMigration, /NOT IN \('pending', 'rejected'\)/)
-  assert.match(reinviteMigration, /CASE WHEN v_keep_active THEN 'active' ELSE 'pending' END/)
+  assert.match(emailActivationMigration, /account_status\s*=\s*'active'/i)
+  assert.match(emailActivationMigration, /'rejected'/i)
   assert.doesNotMatch(reinviteMigration, /DROP TABLE|TRUNCATE|DELETE FROM public\./i)
 })
