@@ -1909,7 +1909,8 @@ function Attendance({ profile, t }: { profile: Profile; t: T }) {
   }
 
   function updateTiming(id: string, key: keyof (typeof timings)[string], value: string) {
-    setTimings(current => ({ ...current, [id]: { start_at: '', end_at: '', notified_at: '', actual_return_at: '', duty_completed_at: '', ...(current[id] || {}), [key]: value } }))
+    const defaults = { start_at: '', end_at: '', notified_at: '', actual_return_at: '', duty_completed_at: '' }
+    setTimings(current => ({ ...current, [id]: { ...(current[id] || defaults), [key]: value } }))
   }
 
   function markAllPresent() {
