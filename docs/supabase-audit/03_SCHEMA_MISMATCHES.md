@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # 03 — Schema mismatches (detailed)
 
 Severity: P0 (blocks production) / P1 (basic function incomplete) / P2 (important) / P3 (improvement).

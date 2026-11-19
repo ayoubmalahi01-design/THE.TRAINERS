@@ -1,163 +1,66 @@
-# THE TRAINERS (تدرّب) — Database Requirements
+# THE TRAINERS — Database Requirements (2026-11-19)
 
-Existing Supabase project only. **No new Supabase project, no schema rewrite, no
-destructive statement.** This document lists what the application uses today and
-the single pending additive migration.
+المشروع مرتبط بقاعدة Supabase الحالية `rxkyryaplszuklagvidi`. لا تنشئ قاعدة بديلة ولا تشغّل Baseline على الإنتاج.
 
----
+## الحالة الحية
 
-## 1. Pending migration — must be executed by the owner
+- 27 جدولًا في `public`.
+- RLS مفعّل على 27/27 جدولًا.
+- أربعة Storage Buckets خاصة.
+- سجل Supabase يحتوي على 21 Migration؛ مجلد `supabase/migrations` يحتوي على نفس الإصدارات.
 
-`supabase/migrations/0001_attendance_session_dimension.sql`
+## الجداول الحالية (27)
 
-**Status: written, reviewed, NOT executed against any database.**
+| Table | Purpose |
+|---|---|
+| `institutions` | المؤسسات وإعداداتها |
+| `profiles` | حسابات المستخدمين وأدوارهم وحالاتهم |
+| `classes` | الأقسام |
+| `students` | التلاميذ |
+| `academic_years` | السنوات الدراسية |
+| `student_academic_enrollments` | تسجيل التلميذ في السنة الدراسية |
+| `student_medical_records` | السجلات الطبية/الإصابات/الإعفاءات (Manager/Admin فقط) |
+| `coach_shifts` | حصص/فترات عمل المدربين |
+| `attendance_records` | حضور التلاميذ حسب الجلسة |
+| `absence_followups` | متابعة الغياب المتتالي والعودة |
+| `daily_reports` | التقارير اليومية ومسار المسودة/الإرسال/المراجعة |
+| `report_details` | تفاصيل التلاميذ داخل التقرير |
+| `report_templates` | قوالب Word حسب المؤسسة |
+| `report_exports` | سجل تصدير التقارير |
+| `student_notes` | ملاحظات التلاميذ والمتابعة |
+| `coach_notebooks` | كراس خاص بكل مدرب |
+| `admin_notices` | التعاميم |
+| `notice_reads` | من قرأ كل تعميم ومتى |
+| `notifications` | إشعارات داخل التطبيق |
+| `conversations` | المحادثات الفردية والجماعية |
+| `conversation_members` | أعضاء المحادثة وحالة آخر قراءة |
+| `messages` | الرسائل ومرفقاتها |
+| `message_reads` | إيصال قراءة كل رسالة لكل قارئ |
+| `invitations` | دعوات البريد/الهاتف (الواجهة الحالية بريد فقط) |
+| `otp_codes` | مخطط OTP للوظائف المستقبلية؛ غير مستخدم في واجهة الدعوات الحالية |
+| `audit_logs` | سجل تغييرات المنصة والمؤسسات |
+| `push_subscriptions` | جدول قديم لاشتراكات المتصفح؛ لا يوجد VAPID sender فعلي في الإصدار الحالي |
 
-What it does:
+- واجهة `get_active_student_restrictions(date)` تعرض للمدرب والإدارة نوع الرخصة/الإعفاء وتواريخه فقط؛ التنفيذ الحساس داخل `app_private` غير المعروض عبر Data API.
 
-1. `alter table public.attendance_records add column if not exists session_key text not null default 'unspecified';`
-2. Drops any unique constraint whose definition is exactly `(student_id, session_date)`,
-   found by inspecting `pg_constraint` rather than by guessing its name.
-3. Creates `attendance_records_session_unique` on `(student_id, session_date, session_key)`.
-4. Creates `attendance_records_report_idx` on `(institution_id, session_date)`.
-5. Runs inside a single `begin; … commit;`.
+## ضوابط الأمان الرئيسية
 
-Safety properties:
+- جميع جداول `public` عليها RLS.
+- القراءة والكتابة مقيدة بالمؤسسة النشطة والعضوية والدور.
+- كراس المدرب مقيد بمالك الكراس `coach_id`.
+- Platform Owner لا يقرأ تقارير المدربين أو تفاصيلها أو سجلاتها التشغيلية؛ سجل التدقيق الذي يراه على مستوى المنصة يقتصر على أحداث المؤسسات.
+- التقارير: Coach يقرأ تقريره فقط؛ Manager/Admin يقرآن التقارير النهائية فقط؛ Coach يحذف مسودته غير المرسلة فقط؛ Manager يحذف التقرير النهائي؛ Admin يحذف التقرير النهائي بعد مراجعته فقط.
+- الملفات الطبية والسجلات الطبية: Manager/Admin فقط. لا Coach ولا Platform Owner.
+- التعاميم: Manager/Admin ينشران ويحذفان؛ Manager/Admin فقط يقرآن قائمة قارئي/غير قارئي التعميم.
+- إيصالات قراءة الرسائل: القارئ أو مرسل الرسالة فقط، بشرط أن يكون المستخدم عضوًا في المحادثة.
+- دعوات الفريق تُنشأ عبر Edge Function service role فقط؛ لا كتابة مباشرة من المتصفح.
 
-- **Additive only.** One new column with a default; every existing row is valid
-  the moment the statement completes.
-- **No row is updated, rewritten or deleted.** Historical attendance keeps
-  `session_key = 'unspecified'`, meaning "recorded before sessions were
-  distinguished".
-- **No table, column, policy or bucket is dropped.**
-- The migration is idempotent (`if not exists` / `if exists` guards).
+## تشغيل SQL
 
-How to execute (choose one):
+- `supabase/THE_TRAINERS_SETUP.sql`: Baseline لمشروع جديد وفارغ فقط.
+- `supabase/INVITATIONS_OTP_INCREMENTAL.sql`: تكملة مخطط الدعوات/OTP بعد Baseline لمشروع جديد.
+- `supabase/migrations/*.sql`: ترحيلات إصدار؛ لا تعِد تنفيذ أي إصدار موجود في سجل Supabase.
+- `supabase/manual-applied/`: مراجع SQL قديمة أو نُفذت يدويًا؛ لا تُشغّل تلقائيًا.
+- `supabase/pending/`: ملفات غير معتمدة للتنفيذ.
 
-- Supabase Dashboard → SQL Editor → paste the file → Run.
-- `supabase db push` if this folder is linked to the project.
-
-Recommended pre-check (expected: no rows, because the old constraint prevented
-duplicates):
-
-```sql
-select student_id, session_date, count(*)
-from public.attendance_records
-group by 1,2 having count(*) > 1;
-```
-
-Post-check:
-
-```sql
-select column_name, is_nullable, column_default
-from information_schema.columns
-where table_name = 'attendance_records' and column_name = 'session_key';
-
-select indexname, indexdef from pg_indexes where tablename = 'attendance_records';
-
-select count(*) from public.attendance_records;   -- no history lost
-```
-
-Rollback (data-preserving, but will fail if a student already has two sessions on
-one date — which is itself proof the fix was needed):
-
-```sql
-drop index if exists public.attendance_records_session_unique;
-alter table public.attendance_records drop column if exists session_key;
-alter table public.attendance_records
-  add constraint attendance_records_student_id_session_date_key
-  unique (student_id, session_date);
-```
-
-**Until this migration runs**, the client detects the missing column and writes
-attendance in the previous two-column shape, reporting
-`migrationRequired: true`. The application is therefore deployable before or
-after the migration; only multi-session-per-day becomes possible after it.
-
----
-
-## 2. Tables used by the application (18)
-
-| Table | Purpose | Access expectation |
-| --- | --- | --- |
-| `institutions` | Tenant record, name, logo reference, settings | Members read own institution; admins update; platform owner manages all |
-| `profiles` | User record, role, `account_status`, institution link | Self read; admins read institution; `guard_profile_privileges` blocks self-promotion |
-| `students` | Student register, unique student number, class | Institution-scoped; admin manages; coach reads assigned |
-| `classes` | Groups / classes | Institution-scoped |
-| `attendance_records` | One row per student per session | Coach writes own; admins read institution; **uniqueness pending migration 0001** |
-| `coach_shifts` | Open/closed shifts; provides `session_key` | Coach owns own shifts |
-| `coach_notebooks` | **Private** trainer notes | Author-only (`coach_id = auth.uid()`); excluded from audit snapshots |
-| `student_notes` | Student follow-up notes | Author + authorized admins |
-| `student_medical_records` | Medical information | **Institution administrators only** |
-| `absence_followups` | Follow-up tracking for absences | `track_absence_followup`, `mark_followup_handled` |
-| `daily_reports` | Daily trainer reports, draft → submitted → reviewed | Author writes; admins review; `lock_final_report` makes finalized reports immutable |
-| `conversations` | Direct and group conversations | `create_conversation`; membership required |
-| `conversation_members` | Membership and access control | `is_conversation_member`, `is_active_member` |
-| `messages` | Text, image, file and voice messages | Read/insert both require membership |
-| `message_reads` | Read receipts | `mark_conversation_read`, `unread_counts` |
-| `notifications` | In-app notifications | `guard_notification_update` limits updates |
-| `admin_notices` | Institutional announcements | Admins publish; `notify_new_notice` generates notifications |
-| `audit_logs` | Accountability trail | `write_audit_log`; protected from unauthorized modification |
-
-## 3. Storage buckets (4)
-
-| Bucket | Contents | Access expectation |
-| --- | --- | --- |
-| `institutions` | Institution logos | Public read for branding, admin write |
-| `trainer-avatars` | Profile pictures | Owner write |
-| `trainer-media` | Message attachments, images, voice notes | Read requires conversation membership (`is_conversation_member`) |
-| `trainer-medical` | Medical attachments | Private; institution administrators only |
-
-## 4. Database functions the client depends on
-
-`create_conversation`, `current_app_role`, `current_institution_id`,
-`guard_notification_update`, `guard_profile_privileges`, `handle_new_auth_user`,
-`is_active_member`, `is_conversation_member`, `is_institution_admin`,
-`is_platform_owner`, `lock_final_report`, `mark_conversation_read`,
-`mark_followup_handled`, `my_profile`, `notify_new_notice`,
-`notify_submitted_report`, `set_updated_at`, `track_absence_followup`,
-`unread_counts`, `write_audit_log`.
-
-These are the server-side enforcement points. The client hides buttons, but
-**authorization lives here** — the UI is not the security boundary.
-
-## 5. Known schema gaps / follow-ups
-
-- **Multi-session attendance** — closed by migration 0001 (pending execution).
-- **Session dimension in reports** — `daily_reports` already carries `shift_id`;
-  aligning it with `attendance_records.session_key` is a reasonable follow-up but
-  is **not** required for correctness today and was not changed.
-- No other additive migration was identified as necessary for the defects fixed
-  in this round.
-
-### Migration 0002 — notify administrators when a saved draft is submitted (additive, pending execution)
-
-File: `supabase/migrations/0002_report_draft_submit_notify.sql`
-
-Why it is needed: `THE_TRAINERS_SETUP.sql` installs
-
-```sql
-create trigger daily_report_notify after insert on public.daily_reports
-  for each row when (new.is_finalized = true)
-  execute function public.notify_submitted_report();
-```
-
-That trigger fires on INSERT only. The D8 draft workflow lets a coach save a report as
-`status='draft', is_finalized=false` and submit it later, which is an **UPDATE** — so the
-final submission created no administrator notification at all.
-
-What it adds: one trigger on the `false → true` transition of `is_finalized` that reuses
-the existing `notify_submitted_report()` function. No table, column, policy or bucket is
-created, altered or dropped, and no data is touched, so it is safe on a live database and
-safe to re-run.
-
-Rollback: `drop trigger if exists daily_report_notify_update on public.daily_reports;`
-
-Until it is applied, everything else about drafts works normally; only the administrator
-notification for draft-originated submissions is missing.
-
-## 6. Rules that were respected
-
-- No SQL was executed against any database.
-- No table, column, policy, bucket or record was dropped or renamed.
-- No duplicate table or duplicate feature was introduced.
-- The existing Supabase project was not replaced.
+راجع `docs/RELEASE_STATUS_2026-11-19.md` قبل أي تعديل على الإنتاج.

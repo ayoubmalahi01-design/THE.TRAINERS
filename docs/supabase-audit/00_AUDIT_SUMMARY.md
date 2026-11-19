@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # THE TRAINERS – تدريب — Supabase Audit Summary
 
 **Audit date:** 2026-11-15

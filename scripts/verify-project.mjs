@@ -14,6 +14,10 @@ const required = [
   'src/lib/report-permissions.ts',
   'src/lib/report-details.ts',
   'src/lib/absence.ts',
+  'src/lib/student-import.ts',
+  'tests/student-import.test.ts',
+  'supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql',
+  'supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql',
   'src/lib/report-template.ts',
   'src/lib/report-template-render.ts',
   'tests/otp-security.test.ts',
@@ -24,10 +28,10 @@ const required = [
   'tests/absence.test.ts',
   'tests/report-template.test.ts',
   'supabase/THE_TRAINERS_SETUP.sql',
-  'SUPABASE_PENDING_CHANGES.sql',
+  'supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql',
   'supabase/INVITATIONS_OTP_INCREMENTAL.sql',
-  'supabase/migrations/0003_account_management_repair.sql',
-  'supabase/migrations/0004_report_templates_details_notifications.sql',
+  'supabase/manual-applied/legacy/0003_account_management_repair.sql',
+  'supabase/manual-applied/legacy/0004_report_templates_details_notifications.sql',
   'supabase/functions/invite-user/index.ts',
   'supabase/functions/verify-otp/index.ts',
   'supabase/functions/send-whatsapp/index.ts',
@@ -51,9 +55,12 @@ if (missing.length) {
 
 const sql = read('supabase/THE_TRAINERS_SETUP.sql')
 const migration = read('supabase/INVITATIONS_OTP_INCREMENTAL.sql')
-const repair = read('supabase/migrations/0003_account_management_repair.sql')
+const repair = read('supabase/manual-applied/legacy/0003_account_management_repair.sql')
 const policy = read('src/lib/account-policy.ts')
 const app = read('src/App.tsx')
+const studentImport = read('src/lib/student-import.ts')
+const statusMigration = read('supabase/migrations/20261119120402_daily_student_status_and_coach_report_template_access.sql')
+const privateRpcMigration = read('supabase/migrations/20261119121224_move_restriction_rpc_to_private_schema.sql')
 const envExample = read('.env.example')
 const config = read('supabase/config.toml')
 const invite = read('supabase/functions/invite-user/index.ts')
@@ -119,8 +126,8 @@ const checks = [
   ['platform owner role', /create\s+type\s+public\.app_role\s+as\s+enum\s*\([^)]*'owner'/is.test(sql)],
   ['coach-private notebook RLS', /coach_notebooks[\s\S]*?coach_id=auth\.uid\(\)/i.test(sql)],
   ['coach report privacy RLS', /reports_read_own_admin[\s\S]*?coach_id=auth\.uid\(\)/i.test(sql)],
-  ['medical records admin-only RLS', /medical_admin_read[\s\S]*?is_institution_admin\(\)/i.test(sql)],
-  ['medical media private bucket', /trainer_medical_admin_read[\s\S]*?trainer-medical/i.test(sql)],
+  ['medical records admin-only RLS', /medical_admin_read[\s\S]*?current_app_role\(\)\s+in\s+\('manager','admin'\)/i.test(sql)],
+  ['medical media private bucket', /trainer_medical_manager_admin_read[\s\S]*?trainer-medical/i.test(sql)],
   ['private notebook excluded from audit snapshots', !/coach_notebooks.*_audit/.test(sql)],
   ['institution isolation', /current_institution_id\(\)/i.test(sql)],
   ['owner email bootstrap', /ayoubmalleh772@gmail\.com/i.test(sql)],
@@ -132,15 +139,24 @@ const checks = [
   ['private notebook UI', /function Notebook\(/.test(app)],
   ['team invitation UI', /function Team\(/.test(app)],
   ['media upload and audio capture', /MediaRecorder/.test(app) && /storage\.from\('trainer-media'\)\.upload/.test(app)],
-  ['bulk Excel/CSV student import', /parseStudentPaste/.test(app) && /importBulk/.test(app)],
+  ['bulk Excel/CSV student import', /parseStudentImportText/.test(app) && /parseStudentImportMatrix/.test(studentImport) && /importBulk/.test(app)],
+  ['Arabic/French/English student import headers', /matricule/.test(studentImport) && /اللقب/.test(studentImport) && /full_name/.test(studentImport)],
+  ['daily status dashboard and page', /daily-status/.test(app) && /function DailyStatus/.test(app)],
+  ['sanitized active restriction RPC', /get_active_student_restrictions/.test(statusMigration) && /RETURNS TABLE[\s\S]*?record_type text[\s\S]*?start_date date[\s\S]*?end_date date/i.test(statusMigration) && !/smr\.(details|attachment_path)/i.test(statusMigration)],
+  ['coach current Word template access', /current_app_role\(\) = 'coach'[\s\S]*?is_current IS TRUE[\s\S]*?is_archived IS FALSE/i.test(statusMigration)],
+  ['restriction lookup uses private definer and public invoker', /CREATE SCHEMA IF NOT EXISTS app_private/i.test(privateRpcMigration) && /app_private\.get_active_student_restrictions[\s\S]*?SECURITY DEFINER/i.test(privateRpcMigration) && /CREATE FUNCTION public\.get_active_student_restrictions[\s\S]*?SECURITY INVOKER/i.test(privateRpcMigration)],
   ['direct and group conversation creation', /create_conversation/.test(app) && /conversation_type/.test(app)],
   ['conversation-scoped message reads and writes', /eq\('conversation_id',id\)/.test(app) && /conversation_id:current\.id/.test(app)],
-  ['conversation membership enforced for messages', /messages_read_member[\s\S]*?is_conversation_member\(conversation_id\)/i.test(sql) && /messages_insert_member[\s\S]*?is_conversation_member\(conversation_id\)/i.test(sql)],
+  ['owner cannot read coach reports (policy removed)', !/create policy reports_owner_read_all/i.test(sql.split('SECTION 99')[0]) || /drop policy if exists reports_owner_read_all/i.test(sql.split('SECTION 99')[1] ?? '')],
+  ['drafts are private to their coach', /create policy reports_read_own_admin[\s\S]*?is_finalized and public\.current_app_role\(\) in \('manager','admin'\)/i.test(sql)],
+  ['coach may delete only his own unsent draft', /create policy reports_delete_own_draft[\s\S]*?not is_finalized/i.test(sql)],
+  ['submit_daily_report is defined in the repository', /create or replace function public\.submit_daily_report/i.test(sql)],
+  ['conversation membership enforced for messages', /messages_read_member[\s\S]*?is_conversation_member\(conversation_id\)/i.test(sql) && /create policy messages_insert_member on public\.messages for insert[\s\S]*?is_conversation_member\(conversation_id\)/i.test(sql) && !/drop policy[^;]*messages_insert_member[^;]*\bfor insert\b/i.test(sql)],
   ['private conversation media storage', /trainer_media_read[\s\S]*?conversation_id::text = \(storage\.foldername\(name\)\)\[2\]/i.test(sql)],
-  ['medical storage is admin and institution scoped', /trainer_medical_admin_read[\s\S]*?is_institution_admin\(\)[\s\S]*?current_institution_id\(\)::text/i.test(sql)],
+  ['medical storage is admin and institution scoped', /trainer_medical_manager_admin_read[\s\S]*?current_app_role\(\)\s+in\s+\('manager','admin'\)[\s\S]*?current_institution_id\(\)::text/i.test(sql)],
   ['automatic report counts from attendance', /attendance_records[\s\S]*?present_count/.test(app)],
   ['admin report review workflow', /reports_admin_review/.test(sql) && /reviewed_by/.test(app)],
-  ['owner and director only can invite', /admin:\s*\['coach'\]/.test(policy) && /coach:\s*\[\]/.test(policy) && /manager:\s*\['admin',\s*'coach'\]/.test(policy)],
+  ['owner, manager and admin invitation matrix', /owner:\s*\['manager',\s*'admin',\s*'coach'\]/.test(policy) && /manager:\s*\['admin',\s*'coach'\]/.test(policy) && /admin:\s*\['coach'\]/.test(policy) && /coach:\s*\[\]/.test(policy)],
   ['administration invites coaches only', /admin:\s*\['coach'\]/.test(invite) && /coach:\s*\[\]/.test(invite) && !/Coaches may invite coaches only/.test(invite)],
   ['account review uses atomic RPC', /review_account/.test(repair) && /reviewAccount\(person\.id, action\)/.test(app)],
   ['team screen no longer writes profiles directly', !between(app, 'function Team', 'function Medical').includes("profiles').update")],
@@ -169,7 +185,7 @@ const checks = [
   ['invitation RLS baseline is Owner/Director and never Coach', /CREATE POLICY invitations_select_admin[\s\S]*?current_app_role\(\) = 'manager'[\s\S]*?\);/.test(migration) && !/CREATE POLICY invitations_select_admin[\s\S]*?current_app_role\(\) = 'coach'/.test(migration)],
   ['OTP acceptance leaves new accounts pending', /WHEN v_profile_status = 'active'[\s\S]*?ELSE 'pending'/.test(migration)],
   ['profile update RLS is owner/director only', /create policy profiles_admin_update[\s\S]*?current_app_role\(\)='manager'[\s\S]*?role in \('admin','coach'\)/.test(sql)],
-  ['owner sees the full audit log', /create policy audit_read_admin[\s\S]*?is_platform_owner\(\)[\s\S]*?\);/.test(sql)],
+  ['platform owner audit is limited to institution events', /create policy audit_read_admin[\s\S]*?is_platform_owner\(\)[\s\S]*?table_name\s*=\s*'institutions'[\s\S]*?\);/.test(sql)],
 
   // ------------------------------------------------------- account repair migration
   ['repair migration is transactional and non-destructive', /^\s*begin\s*;/im.test(repair) && /^\s*commit\s*;/im.test(repair) && !/drop\s+table\s+(if\s+exists\s+)?public\./i.test(repair) && !/truncate\s+(table\s+)?public\./i.test(repair) && !/delete\s+from\s+public\./i.test(repair)],
@@ -207,7 +223,7 @@ const checks = [
   ['setup has no invalid partial unique constraint', !/constraint\s+\w+\s+unique\s*\([^)]*\)\s*where/i.test(sql)],
   ['setup dollar-quoted functions are balanced', ((sql.match(/\$\$/g) || []).length % 2) === 0],
   ['setup enables RLS on core tables', ['daily_reports','report_details','attendance_records','messages','message_reads','notifications','coach_notebooks','audit_logs'].every((table) => new RegExp(`alter table public\\.${table} enable row level security`, 'i').test(sql))],
-  ['report deletion is restricted by role', /reports_delete_manager[\s\S]*?current_app_role\(\) = 'manager'[\s\S]*?reports_delete_admin[\s\S]*?current_app_role\(\) = 'admin'/i.test(sql) && !/create policy [a-z_]*delete[a-z_]* on public\.daily_reports[\s\S]{0,200}?current_app_role\(\) = 'coach'/i.test(sql)],
+  ['report deletion is restricted by role', /reports_delete_manager[\s\S]*?current_app_role\(\) = 'manager'[\s\S]*?reports_delete_admin[\s\S]*?current_app_role\(\) = 'admin'/i.test(sql) && !(sql.match(/create policy [a-z_]*delete[a-z_]* on public\.daily_reports[^;]*?current_app_role\(\) = 'coach'[^;]*;/gi) ?? []).some((policy) => !/not is_finalized/i.test(policy))],
   ['report details are written before finalization', (() => {
     const details = app.indexOf('Step 2 — replace student details')
     const finalize = app.indexOf('Step 3 — finalize')
@@ -217,10 +233,10 @@ const checks = [
   ['Excel import uses read-excel-file', /read-excel-file\/browser/.test(app)],
   ['unknown routes render a not-found screen', /path="\*" element=\{<NotFound/.test(app)],
   ['Word export uses the uploaded template with a fallback', /renderReportTemplate/.test(app) && /buildReportDocument/.test(app)],
-  ['absence queue is computed from attendance', /computeAbsenceFollowUps/.test(app) && /attendance_records/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings'))],
+  ['absence queue uses persisted trigger-generated follow-ups', /absence_followups/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && /mark_followup_handled/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings')) && !/computeAbsenceFollowUps/.test(between(app, 'function FollowUpQueue', 'function InstitutionSettings'))],
   ['read receipts are per message and reader', /message_reads\(message_id, reader_id, read_at\)/i.test(sql) && /primary key \(message_id, reader_id\)/i.test(sql) && /on conflict \(message_id, reader_id\)/i.test(sql)],
   ['institution deletion is not called from the browser', !/rpc\('delete_institution'/.test(app) && /institutionDeleteUnavailable/.test(app)],
-  ['pending production SQL stays approval-gated', /SECTION 12/.test(read('SUPABASE_PENDING_CHANGES.sql')) && /requires\s+explicit[\s\S]{0,40}?production\s+approval/i.test(read('SUPABASE_PENDING_CHANGES.sql'))],
+  ['pending production SQL stays approval-gated', /SECTION 12/.test(read('supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql')) && /requires\s+explicit[\s\S]{0,40}?production\s+approval/i.test(read('supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql'))],
   ['web manifest carries valid Arabic metadata and icons', (() => {
     try {
       const manifest = JSON.parse(read('public/manifest.webmanifest'))
@@ -234,7 +250,7 @@ const checks = [
 
   // ----------------------------------------------------------- secret hygiene
   ['no service-role key in frontend', !/SUPABASE_SERVICE_ROLE_KEY|service_role_key|serviceRoleKey/.test(app) && !/SUPABASE_SERVICE_ROLE_KEY|service_role_key|serviceRoleKey/.test(read('src/lib/supabase.ts'))],
-  ['env example contains placeholders only', /YOUR_PROJECT_REF/.test(envExample) && /YOUR_ANON_OR_PUBLISHABLE_KEY/.test(envExample) && !/https:\/\/[a-z0-9]{15,}\.supabase\.co/i.test(envExample) && !/sb_publishable_[A-Za-z0-9_-]{10,}/.test(envExample)],
+  ['env example targets the configured Supabase project with public credentials only', /https:\/\/rxkyryaplszuklagvidi\.supabase\.co/.test(envExample) && /sb_publishable_[A-Za-z0-9_-]{10,}/.test(envExample) && !/VITE_[A-Z0-9_]*SERVICE_ROLE|VITE_[A-Z0-9_]*service_role|postgresql:\/\//i.test(envExample)],
   ['verification script has no hardcoded credentials', !/https:\/\/[a-z0-9]{15,}\.supabase\.co/i.test(verifyScript) && !/sb_publishable_[A-Za-z0-9_-]{10,}/.test(verifyScript)],
 ]
 

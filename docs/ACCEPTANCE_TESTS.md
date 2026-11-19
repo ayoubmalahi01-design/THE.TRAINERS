@@ -31,3 +31,13 @@ Use separate test identities for each role and at least two institutions. Do not
 ## Release gate
 
 Do not mark production acceptance complete until every applicable test above passes against the deployed Supabase project and on real target devices. Save test results and timestamps with the release record.
+
+
+## 2026-11-19 follow-up repair acceptance checks
+
+- Import an XLSX with Arabic headers `رقم التلميذ`, `الاسم`, `اللقب`; verify the preview combines the name and surname and preserves text codes such as `0012`.
+- Repeat with French headers `Matricule`, `Nom`, `Prénom` and English headers `student_code`, `first_name`, `last_name`.
+- Confirm duplicate codes already in the institution and duplicates within the same file are excluded before insert.
+- Set a student exemption/permission period in the administration medical page. Verify Coach sees only student identity, type, and validity dates in Daily Status, and cannot read medical details or attachments.
+- Verify a period is visible on its start/end dates and disappears from the active list after its end date without deleting the source record.
+- As Coach, export a finalized report and verify the institution's current non-archived DOCX template is used; verify Coach cannot list or manage archived/older templates.

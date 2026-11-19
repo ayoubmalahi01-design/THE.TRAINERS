@@ -1,3 +1,5 @@
+> Historical snapshot: this document predates the 2026-11-19 full reconciliation. For current implementation, permissions, migrations, and release readiness, see `docs/RELEASE_STATUS_2026-11-19.md`.
+
 # THE TRAINERS (تدرّب) — Final Test Report
 
 Branch `appjet`. Every result below is a command that was actually run in the

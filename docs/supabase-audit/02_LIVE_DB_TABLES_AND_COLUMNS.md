@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # 02 — Live DB tables and columns (probed via anon REST)
 
 Probe method: `GET /rest/v1/<table>?select=<col>&limit=1` for 193 (table,column) pairs, plus `select=*` for column discovery on empty tables. Raw output: `column_probe.json`, `live_tables_probe.json`.

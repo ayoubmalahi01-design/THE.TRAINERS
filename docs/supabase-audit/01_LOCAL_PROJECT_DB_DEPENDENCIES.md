@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # 01 — Local project database dependencies (from src + SQL)
 
 Source of truth: `src/App.tsx` (single-file app), `src/lib/*.ts`, `supabase/*.sql`, `supabase/migrations/*.sql`, `supabase/functions/*`.

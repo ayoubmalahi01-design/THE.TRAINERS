@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # 04 — RLS, security, Auth, and Storage
 
 ## 4.1 RLS policies (UNVERIFIED via REST)

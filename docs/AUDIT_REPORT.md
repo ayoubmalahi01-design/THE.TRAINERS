@@ -1,3 +1,5 @@
+> Historical snapshot: this document predates the 2026-11-19 full reconciliation. For current implementation, permissions, migrations, and release readiness, see `docs/RELEASE_STATUS_2026-11-19.md`.
+
 # THE TRAINERS (تدرّب) — Deep Audit Report & Implementation Plan
 
 > **Status:** read-only audit. No application code was modified, no SQL was executed, no database structure was changed, nothing was deployed and nothing was merged into `main`.

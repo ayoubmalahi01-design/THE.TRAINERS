@@ -1,3 +1,5 @@
+> Historical audit snapshot: superseded by `docs/RELEASE_STATUS_2026-11-19.md`; do not use this file alone to change production.
+
 # THE TRAINERS – تدريب — Full Live Supabase Audit (Refresh)
 **Audit date:** 2026-11-15 (refresh)
 **Mode:** READ-ONLY (anon REST; no SQL executed, no files modified)

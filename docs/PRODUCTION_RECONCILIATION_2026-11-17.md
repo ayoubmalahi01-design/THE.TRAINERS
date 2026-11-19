@@ -1,3 +1,5 @@
+> Historical snapshot: this document predates the 2026-11-19 full reconciliation. For current implementation, permissions, migrations, and release readiness, see `docs/RELEASE_STATUS_2026-11-19.md`.
+
 # THE TRAINERS — Production Reconciliation 2026-11-17
 
 ## 1. Actual Production State
@@ -73,8 +75,8 @@
 | Change | Status | File |
 |--------|--------|------|
 | Report submission via RPC | IMPLEMENTED IN SOURCE | src/App.tsx |
-| Read tracking for notices (notice_reads) | IMPLEMENTED IN SOURCE (SQL pending) | SUPABASE_PENDING_CHANGES.sql Section 13 |
-| Notice delete policy (admin_notices_delete) | IMPLEMENTED IN SOURCE (SQL pending) | SUPABASE_PENDING_CHANGES.sql Section 14 |
+| Read tracking for notices (notice_reads) | IMPLEMENTED IN SOURCE (SQL pending) | supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql Section 13 |
+| Notice delete policy (admin_notices_delete) | IMPLEMENTED IN SOURCE (SQL pending) | supabase/pending/SUPABASE_PENDING_CHANGES_REVIEW_REQUIRED.sql Section 14 |
 | Push subscriptions table definition | IMPLEMENTED IN SOURCE (SQL pending) | supabase/push_subscriptions_pending.sql |
 | Service Worker push handling | IMPLEMENTED IN SOURCE | public/sw.js |
 | Push subscription management (frontend) | IMPLEMENTED IN SOURCE | src/App.tsx |
