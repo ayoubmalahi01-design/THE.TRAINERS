@@ -591,3 +591,50 @@ tr:last-child td{border-bottom:0}
 .attendance-time-grid input{min-width:0;width:100%;border:1px solid var(--line,#e5e7eb);border-radius:8px;padding:7px;background:var(--surface,#fff);color:inherit}
 
 .record-timeline{display:block;line-height:1.8;margin-top:6px;white-space:normal}
+
+/* PENDING REVIEW — WhatsApp-inspired messaging presentation only.
+   No schema, RLS, message delivery, or permission behavior is changed. */
+.chat-workspace{background:#e9eee8;border:1px solid #d8e0d8;border-radius:14px;min-height:calc(100dvh - 205px);height:calc(100dvh - 205px);box-shadow:0 8px 28px rgba(20,45,30,.08)}
+.conversation-list{background:#fff;max-height:none;padding:8px;border-inline-end:1px solid #dce4dc}
+.conversation-item{min-height:70px;border-radius:10px;padding:10px 9px;border-bottom:1px solid #f0f2ef;gap:11px}
+.conversation-item:hover{background:#f5f8f5}
+.conversation-item.selected{background:#eaf2e9;box-shadow:inset 3px 0 #638d55}
+.conversation-item .avatar{width:48px;height:48px;min-width:48px;border-radius:50%;background:#dce8d9;color:#355b3c}
+.conversation-item b{font-size:13px;font-weight:650;color:#26352b}
+.conversation-item small{font-size:11px;color:#77847b}
+.unread-badge{background:#4d8a55;min-width:21px;height:21px;font-size:10px}
+.chat-panel-inner{background:#efece3;position:relative}
+.chat-title{min-height:68px;padding:10px 16px;background:#f8faf7;border-bottom:1px solid #dfe6df;display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px}
+.chat-title .grow b{font-size:14px;color:#24352a}
+.chat-title small{display:block;margin-top:4px;color:#7b897f}
+.chat-title .heading-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.chat-title .members-btn{padding:8px 11px;border-radius:20px;font-size:11px;background:#edf3ec;color:#48634c}
+.chat-panel-inner .chat-messages{max-height:none;min-height:0;padding:20px clamp(12px,3vw,38px);gap:7px;background-color:#eeeae0;background-image:radial-gradient(rgba(90,110,87,.09) .7px,transparent .7px);background-size:18px 18px}
+.chat-bubble{max-width:min(76%,620px);padding:8px 11px 6px;background:#fff;border:1px solid rgba(30,55,35,.06);border-radius:10px 10px 10px 3px;box-shadow:0 1px 1px rgba(0,0,0,.06)}
+.chat-bubble.mine{background:#e1f1d7;border-color:#d4e7c9;border-radius:10px 10px 3px 10px}
+.chat-bubble b{display:block;font-size:10px;color:#55765b;margin-bottom:3px}
+.chat-bubble p{font-size:13px;line-height:1.55;color:#26332a;margin:2px 0 5px;overflow-wrap:anywhere}
+.chat-bubble small{display:block;text-align:end;font-size:9px;color:#829087;line-height:1.3}
+.chat-bubble .chat-image{max-width:min(280px,65vw);max-height:280px}
+.chat-compose{align-items:center;gap:8px;padding:10px 12px;background:#f7faf7;border-top:1px solid #dce4dc}
+.chat-compose .attach-btn,.chat-compose .icon-btn{width:40px;height:40px;border-radius:50%;background:#edf3ed;color:#536b56;display:grid;place-items:center;flex:0 0 40px}
+.chat-compose input{height:42px;border:0!important;border-radius:24px!important;background:#fff!important;padding:0 17px!important;box-shadow:0 1px 2px rgba(0,0,0,.06);font-size:13px}
+.chat-compose .icon-send{width:42px;height:42px;min-width:42px;border-radius:50%;padding:0;background:#4f8054;color:#fff}
+.chat-compose .icon-send:disabled{opacity:.45}
+.load-older{border-radius:18px;background:#fff;color:#55705a;border:1px solid #dce6da}
+.empty-chat{color:#6e7b70}
+@media(max-width:680px){
+ .chat-workspace{height:calc(100dvh - 175px);min-height:520px;border-radius:12px}
+ .conversation-list{display:flex;flex-direction:column;gap:2px;overflow:auto;max-height:34%;padding:5px;border-bottom:1px solid #dce4dc}
+ .conversation-item{width:100%;min-width:0;min-height:60px}
+ .chat-panel-inner{min-height:0;flex:1}
+ .chat-title{min-height:58px;padding:8px 10px}
+ .chat-title .heading-actions{gap:4px}
+ .chat-title .members-btn{font-size:10px;padding:7px 8px}
+ .chat-panel-inner .chat-messages{padding:12px 9px}
+ .chat-bubble{max-width:88%}
+ .chat-compose{gap:5px;padding:8px 7px}
+ .chat-compose .attach-btn,.chat-compose .icon-btn{width:35px;height:35px;flex-basis:35px}
+ .chat-compose .icon-send{width:38px;height:38px;min-width:38px}
+}
+@media(min-width:681px) and (max-width:980px){.chat-workspace{grid-template-columns:minmax(190px,230px) minmax(0,1fr)}}
